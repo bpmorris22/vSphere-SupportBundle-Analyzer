@@ -475,7 +475,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.7";
+var APP_VERSION = "1.17.8";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -610,12 +610,24 @@ var WMI_SVC=null, WMI_PID=-1, TRACE_MEM=true, TRACE_MEM_LAST=0, TRACE_MEM_EVERY=
    the HTA host - and note killBatTree is the only other WMI user here and only runs after a 40-minute
    tar timeout, so WMI has probably never once succeeded in this app. Hence: three fallbacks, and the
    reason is written into the trace either way. */
+/* THE WMI ENTRY POINT. `GetObject` is UNDEFINED in this app: the HTA declares
+   x-ua-compatible IE=edge, so the script runs on Chakra, which does not provide the classic JScript
+   GetObject global. The Azure trace proved it outright -
+       mem OFF: GetObject(winmgmts) failed: 'GetObject' is undefined
+   which also means killBatTree - added in v1.15.0 so an abandoned tar could not race the next run -
+   has NEVER ONCE WORKED: its body is wrapped in try/catch, so it silently reported "0 process(es)"
+   and the 40-minute timeout left tar running exactly as before the fix. SWbemLocator reaches the same
+   service through ActiveXObject, which Chakra does provide (verified against real WMI). */
+function wmiSvc(){
+  if(WMI_SVC) return WMI_SVC;
+  WMI_SVC=new ActiveXObject("WbemScripting.SWbemLocator").ConnectServer(".", "root\\cimv2");
+  return WMI_SVC;
+}
 function selfPidWmi(){
   if(WMI_PID>=0) return WMI_PID;
   WMI_PID=0;
-  try{
-    if(!WMI_SVC) WMI_SVC=GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2");
-  }catch(ex){ TRACE_MEM_WHY="GetObject(winmgmts) failed: "+(ex&&ex.message?ex.message:ex); return 0; }
+  try{ wmiSvc(); }
+  catch(ex){ TRACE_MEM_WHY="WMI connect failed: "+(ex&&ex.message?ex.message:ex); return 0; }
   var want=lc(SELF_HTA), seen=0, only=0;
   try{
     var procs=WMI_SVC.ExecQuery("SELECT ProcessId,CommandLine FROM Win32_Process WHERE Name='mshta.exe'");
@@ -761,7 +773,7 @@ function pollDone(ctx){
 function killBatTree(ctx){
   var killed=0;
   try{
-    var svc=GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2");
+    var svc=wmiSvc();   // was GetObject(winmgmts:...), undefined under Chakra - this function never ran
     var like=String(ctx.bat).replace(/\\/g,"\\\\").replace(/'/g,"_").replace(/%/g,"_");
     var procs=svc.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE CommandLine LIKE '%"+like+"%'");
     var e=new Enumerator(procs);
@@ -1049,14 +1061,34 @@ function isArchive(p){ return /\.(tar\.gz|tgz|tar|zip)$/i.test(String(p)); }
    ADODB binary -> flip Type to text with an 8859-1 charset at Position 0 (all 256 byte values map
    1:1, no multibyte). Returns "" if it can't read (caller then falls through to the normal path -
    never a false block). */
+/* Above this size we must NOT use ADODB.Stream to peek at a header (see fileHeadLatin1). */
+var SNIFF_FULL_MAX=64*1024*1024;
+/* Bounded head read: FSO text mode Read(n) reads ONLY n characters, so cost is independent of file
+   size. ASCII bytes come back exact; bytes >= 0x80 are codepage-mapped, so no caller may rely on
+   them. That is fine here - every marker that actually decides anything (iso9660 "CD001", the
+   all-zero "empty" test, "ustar", "@PaxHeader", "PK") is ASCII. */
+function fileHeadBounded(path, n){
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var f=fso.OpenTextFile(path,1,false,0); var s=f.Read(n); f.Close(); return String(s);
+  }catch(e){ return ""; }
+}
+/* ADODB.Stream has NO partial LoadFromFile: to hand back the first n bytes it loads the ENTIRE file
+   into memory. Measured on a 391 MB archive - 539 ms, working set 18 MB -> 437 MB - to obtain 34 KB.
+   The Azure bundle whose fleet scan crashed is 3.877 GB: an allocation a 32-bit mshta cannot satisfy,
+   attempted immediately before the last line that crash trace ever wrote, and reached ONLY in toc
+   mode (pointing at the archive) which is why months of tree-mode runs here never reproduced it.
+   Large files therefore take the bounded reader: 19 ms, +3 MB, byte-exact for everything that
+   matters. Small files keep the exact latin1 path unchanged. */
 function fileHeadLatin1(path, n){
+  var sz=fileSize(path);
+  if(sz<0 || sz>SNIFF_FULL_MAX) return fileHeadBounded(path, n);
   var st=null;
   try{ st=new ActiveXObject("ADODB.Stream"); st.Type=1; st.Open(); st.LoadFromFile(path);
     var take=Math.min(n, st.Size); if(take<=0){ st.Close(); return ""; }
     var bytes=st.Read(take); st.Close();
     var out=new ActiveXObject("ADODB.Stream"); out.Type=1; out.Open(); out.Write(bytes); out.Position=0;
     out.Type=2; out.Charset="iso-8859-1"; var s=out.ReadText(); out.Close(); return String(s);
-  }catch(e){ try{ if(st) st.Close(); }catch(e2){} return ""; }
+  }catch(e){ try{ if(st) st.Close(); }catch(e2){} return fileHeadBounded(path, n); }
 }
 /* identify the real container from magic bytes (extension lies - a VCSA .tgz is a plain tar; here a
    Dell VxRail RASR recovery ISO was renamed .tgz). Returns: gzip|tar|pax|zip|iso9660|empty|"".
@@ -6234,12 +6266,25 @@ function resolveBundleDesc(path){
   return null;
 }
 /* synchronous TOC read (blocking) - fine for batch fleet processing */
+/* Traced internally (v1.17.8). The Azure crash trace ended at processHostSync's "detectType" line,
+   which is written immediately BEFORE this function - and everything in here was invisible: the
+   blocking multi-GB tar index, the whole-listing read, the parse, AND the plain `return false` path,
+   which sent processHostSync back with `return null` and no trace line at all. So "died in
+   readTocSync" and "readTocSync said no, cleanly" looked identical. They no longer do. */
 function readTocSync(archive){
-  var cached=tryTocCache(archive); if(cached){ parseTocTsv(cached); return TOC.length>0; }
+  trace("  readTocSync: tryTocCache");
+  var cached=tryTocCache(archive); if(cached){ parseTocTsv(cached); trace("  readTocSync: cache hit, "+TOC.length+" members"); return TOC.length>0; }
   var fso=new ActiveXObject("Scripting.FileSystemObject"), tmp=fso.GetSpecialFolder(2)+"", raw=tmp+"\\vsbtoc_"+uid()+".txt";
+  trace("  readTocSync: tar -tvf "+fmtSize(fileSize(archive))+" (blocking)");
   var r=runBat(['"'+batEsc(TAR)+'" -tvf "'+batEsc(archive)+'" > "'+batEsc(raw)+'" 2>"__LOG__"'], false);
-  var ok=false; try{ if(fso.FileExists(raw)){ parseTocRaw(readUtf8(raw)); ok=TOC.length>0; fso.DeleteFile(raw); } }catch(e){}
-  if(ok) cacheToc(archive); return ok;
+  trace("  readTocSync: tar returned rc="+r.rc+", listing "+fmtSize(fileSize(raw)));
+  var ok=false;
+  try{ if(fso.FileExists(raw)){ var txt=readUtf8(raw); trace("  readTocSync: parsing listing"); parseTocRaw(txt); txt=null; ok=TOC.length>0; fso.DeleteFile(raw); } }
+  catch(e){ trace("  readTocSync: THREW "+(e&&e.message?e.message:e)); }
+  gcNow();
+  if(!ok){ trace("  readTocSync: NO MEMBERS - host will be skipped (tar rc="+r.rc+"; see the on-screen log)"); return false; }
+  trace("  readTocSync: "+nf(TOC.length)+" members indexed");
+  cacheToc(archive); return true;
 }
 /* THE single per-bundle reset. analyze() used to keep its own shorter copy of this list, and the two
    drifted: VIBS / VIBS_NOTABLE were missing from analyze()'s copy, so opening an ESXi bundle and then a
@@ -6250,6 +6295,7 @@ function resetHostGlobals(){ TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFI
 function processHostSync(path){
   var tp="h"+FLEET_I+" "+baseName(path);
   trace(tp+" | ENTER processHostSync");
+  trace(tp+" | resolveBundleDesc (magic-byte sniff)");
   var d=resolveBundleDesc(path); if(!d){ trace(tp+" | resolveBundleDesc -> null (skip)"); return null; }
   resetHostGlobals(); MODE=d.mode; ARCHIVE=d.archive||""; ROOT=d.root||"";
   var host=sanitHost(d.host||baseName(path)); if(!host) host="host"+FLEET_I;
@@ -6261,7 +6307,7 @@ function processHostSync(path){
     if(cached){ trace(tp+" | reused cached snapshot"); appendLog("  = "+host+" reused saved analysis from "+(cached.analyzedAt||"?")+" (source unchanged, skipped re-parse)"); return cached; } }
   $("hostName").value=host;
   trace(tp+" | detectType");
-  if(MODE==="toc"){ if(!readTocSync(ARCHIVE)) return null; detectType(); }
+  if(MODE==="toc"){ if(!readTocSync(ARCHIVE)){ trace(tp+" | readTocSync failed (skip)"); return null; } detectType(); }
   else { PREFIX=baseName(ROOT); detectTypeTree(); }
   if(!BTYPE){ trace(tp+" | no BTYPE (skip)"); return null; }                    // wrapper / not a real bundle -> skip
   trace(tp+" | buildInventory");   buildInventory();
@@ -6432,13 +6478,15 @@ function baseHost(h){ h=lc(trimStr(h||"")); var d=h.indexOf("."); return d>0?h.s
 function hostSetsIntersect(a,b){ if(!a||!b) return false; var s={}; for(var i=0;i<a.length;i++) s[baseHost(a[i])]=1;
   for(var j=0;j<b.length;j++){ if(s[baseHost(b[j])]) return true; } return false; }
 function fleetDone(){
+  trace("fleetDone: entry, "+FLEET.length+" host(s)");
   BUSY=false; $("fleetBtn").disabled=false; $("procBtn").disabled=false;
   assignClusters();
   FLEET.sort(function(a,b){ var ca=a.clusterUuid||"~"+a.host, cb=b.clusterUuid||"~"+b.host; if(ca!==cb) return ca<cb?-1:1; return b.risk-a.risk; });
-  renderRoster();
+  trace("fleetDone: renderRoster"); renderRoster();
   setStatus("Fleet triage complete - "+FLEET.length+" host(s) from "+FLEET_CANDS.length+" candidate(s).","ok");
   var nc=0,seen={}; for(var i=0;i<FLEET.length;i++){ if(FLEET[i].clusterUuid&&!seen[FLEET[i].clusterUuid]){ seen[FLEET[i].clusterUuid]=1; nc++; } }
   $("fleetInfo").innerHTML=FLEET.length+" host(s), "+nc+" cluster(s) &middot; "+fleetBase();
+  trace("fleetDone: COMPLETE");
 }
 function fmtAnalyzed(r){ var t=r.analyzedAt?isoShort(r.analyzedAt):"-";
   var tag = r.reused ? ' <span class="tag cmd" title="Reused from _Processed - source bundle unchanged">cached</span>'
