@@ -50,7 +50,9 @@
   .muted{color:#8b949e}
   .err{color:#f85149}
   .ok{color:#3fb950}
-  header{padding:8px 14px;background:#161b22;border-bottom:1px solid #30363d}
+  /* header sits OUTSIDE #content, so it needs the same zoom+width pair or it stays at fixed size while
+     the rest of the app scales with A+ / A- (see applyZoom). Same 1/zoom width compensation as #content. */
+  header{padding:8px 14px;background:#161b22;border-bottom:1px solid #30363d;zoom:0.9;width:111.111%;box-sizing:border-box}
   header h1{display:inline-block;font-size:15px;margin:0;font-weight:600;vertical-align:middle}
   header h1 small{color:#8b949e;font-weight:400}
   .pill{display:inline-block;font-size:11px;color:#8b949e;border:1px solid #30363d;border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
@@ -473,7 +475,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.4";
+var APP_VERSION = "1.17.5";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -487,6 +489,12 @@ var PREFIX="";               // leading path component inside the archive (toc m
 var BTYPE="";                // "esxi" | "vcsa" | ""
 var TOC=[];                  // toc mode: [{rel,size}]
 var TOCMAP={};               // rel -> size (files only)
+/* Derived TOC indexes, built lazily and invalidated whenever TOC is rebuilt (see resetHostGlobals /
+   parseTocRaw / parseTocTsv). A vc-support index is routinely 200k-800k members and ~20 different
+   helpers used to LINEAR-SCAN the whole of it - listUnder alone has 18 call sites - so a single run
+   made 40-60 full passes. These two collapse that to hash lookups + binary search. */
+var TOCDIR=null;             // "#<dir>" -> [{rel,name,size}]  (direct children of one directory)
+var TOCSORT=null;            // TOC entries sorted by rel, for prefix ranges via binary search
 var INVENTORY=[];            // [{cat,name,desc,rels,prefix,key,present,size,count,rel}]
 var NODE={};                 // node-config kv
 var LASTOUTDIR="", EXDIR="", NODEDIR="";
@@ -528,7 +536,16 @@ var VPXD_SRCNOTE="";       // which vpxd files fed VPXD_LINES (for provenance/lo
    runs a host's whole analysis in one synchronous block (single-Analyze survives because its timed
    chunks let GC run). 64MB still covers the working set; anything larger is simply re-read. */
 var LOGCACHE={}, LOGCACHE_BYTES=0, LOGCACHE_MAX=64*1024*1024;
-function logCacheClear(){ LOGCACHE={}; LOGCACHE_BYTES=0; }
+/* What a cached line array actually COSTS in the process: UTF-16 characters (2 bytes each, so ~2x
+   the file's ASCII byte count) plus a per-string object header. Measured on a representative vpxd
+   line set: a 30 MB log = 67 MB+ live. Budgeting on file bytes let LOGCACHE_MAX admit ~140 MB. */
+function logCacheCost(sz, nLines){ return (sz*2)+((nLines||0)*40); }
+/* small config / command members re-read by several passes (etc/passwd + etc/group by parseUsersV
+   and again by buildPersistAccounts, the VIB list by parseInstallDate and again by buildVibChecks,
+   vmsyslog.conf / rsyslog.conf by both buildPersistence and buildSecurity). Each miss was a
+   fileExists + full readUtf8. Bounded by count and by per-entry size; cleared with the log cache. */
+var MEMCACHE={}, MEMCACHE_N=0, MEMCACHE_MAX=64, MEMCACHE_MAXLEN=1048576;
+function logCacheClear(){ LOGCACHE={}; LOGCACHE_BYTES=0; MEMCACHE={}; MEMCACHE_N=0; }
 /* force a full GC (Trident/JScript CollectGarbage). During a long SYNCHRONOUS block - which is exactly
    how fleet mode processes each host - the collector rarely runs on its own, so transient allocations
    accumulate until the process is killed with no catchable error. Calling this between heavy stages
@@ -566,7 +583,9 @@ function lc(s){ return String(s==null?"":s).toLowerCase(); }
    datastore paths like vsan:523b...) to '_' on extraction, so we must do the same to locate the
    extracted file. Extraction MEMBERS passed to bsdtar keep the original ':' (the archive name). */
 function winRel(rel){ return String(rel).replace(/\//g,"\\").replace(/[:*?"<>|]/g,"_"); }
-function fmtSize(n){ if(!n) return (n===0?"0 B":"-"); var u=["B","KB","MB","GB","TB"], i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
+/* fileSize() returns -1 when it cannot stat the file, so a negative must render as "unknown" (-),
+   not as "-1 B" - a size is evidence and a failed stat is not a size. */
+function fmtSize(n){ if(!n || n<0) return (n===0?"0 B":"-"); var u=["B","KB","MB","GB","TB"], i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
 
 /* ---------- raw-byte reader + utmp helpers (v1.17.0, ported from the Linux UAC Analyzer) ----------
    ADODB.Stream Type=1 reads raw bytes; new VBArray(...).toArray() -> JS array of 0..255 that indexes
@@ -1000,8 +1019,8 @@ function analyze(){
   if(!requireHost()) return;
   var outdir=trimStr($("outDir").value); if(!outdir){ syncOutDir(); outdir=trimStr($("outDir").value); }
   LASTOUTDIR=outdir; EXDIR=outdir+"\\_extracted"; NODEDIR=outdir+"\\_nodecfg"; ensureDir(outdir);
-  ANALYZED=false; LOGON=[]; BF=null; RANSOM=null; MAINT=[]; VMEV=[]; VMEV_SRC=""; VPXD_HUMANS=[]; VM_MOREF_NAME={}; ACTIONS=[]; TIMELINE=[]; IOCHITS=[]; INDIC=[]; CVES=[]; PERSIST=[]; SPEC=[]; VMS=[]; USERSV=[]; PAM_FINDS=null;
-  VPXD_LINES=null; VPXD_SRCNOTE=""; WRAPD=0; logCacheClear();
+  resetHostGlobals();                     // ONE reset list, shared with fleet mode - see its comment
+  ANALYZED=false; WRAPD=0; FLEET_TRACE_PATH="";   // a stale fleet trace must not absorb this run's stage lines
   $("anStats").innerHTML=""; $("ovIndic").innerHTML=""; $("ovCve").innerHTML=""; $("anStatus").innerHTML="Logons / Actions / Timeline / Persistence / IOC not parsed yet.";
 
   // folder input?
@@ -1121,7 +1140,7 @@ function tocGuardReport(){
   if(TOC_BAD||TOC_CLASH) setStatus("Index loaded with "+(TOC_BAD+TOC_CLASH)+" unsafe/colliding member name(s) rejected - see log. Treat this bundle as tampered until explained.","err");
 }
 function parseTocRaw(txt){
-  TOC=[]; TOCMAP={}; PREFIX=""; tocGuardReset(); var canon={};
+  TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFIX=""; tocGuardReset(); var canon={};
   var lines=String(txt).split("\n");
   for(var i=0;i<lines.length;i++){ var ln=lines[i]; if(ln.charAt(ln.length-1)==="\r") ln=ln.substring(0,ln.length-1);
     if(!ln) continue; var m=ln.match(TOC_RE_BSD); if(!m) m=ln.match(TOC_RE_GNU); if(!m) continue;
@@ -1137,7 +1156,7 @@ function parseTocRaw(txt){
   tocGuardReport();
 }
 function parseTocTsv(tsv){
-  TOC=[]; TOCMAP={}; PREFIX=""; tocGuardReset(); var canon={};
+  TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFIX=""; tocGuardReset(); var canon={};
   var lines=String(tsv).split("\n");
   for(var i=0;i<lines.length;i++){ var ln=trimStr(lines[i]); if(!ln||ln.charAt(0)==="#") continue;
     var tab=ln.indexOf("\t"); if(tab<0) continue; var rel=ln.substring(0,tab); var size=parseInt(ln.substring(tab+1),10)||0;
@@ -1145,6 +1164,41 @@ function parseTocTsv(tsv){
     tocGuardAdd(rel, size, canon);
   }
   tocGuardReport();
+}
+/* ---- TOC indexes (v1.17.5) ----------------------------------------------------------------
+   A vc-support index is routinely 200k-800k members, and ~20 helpers each walked ALL of it:
+   listUnder alone has 18 call sites, plus hasPrefixToc / dirStats / firstPatternFile / dirFiles /
+   rotationsOf / vpxdAllRels / auditRotations / sshKeyFiles / systemdUnitRels / envoyFrontLog /
+   drmDumpSets / vmLogRels / the pam.d sweeps. One run therefore made 40-60 full linear passes over
+   the whole index. Two lazily-built structures replace them:
+     tocChildren(dir)  direct children of ONE directory        - hash lookup
+     tocRange(prefix)  every member under a SUBTREE, as [lo,hi) - two binary searches
+   Both are invalidated wherever TOC is rebuilt (parseTocRaw / parseTocTsv / resetHostGlobals), and
+   both are built only if something asks - a run that never needs them pays nothing. Tree mode is
+   untouched: it enumerates the filesystem, not the TOC. */
+function tocDirIndex(){
+  if(TOCDIR) return TOCDIR;
+  var idx={};
+  for(var i=0;i<TOC.length;i++){ var rel=TOC[i].rel, sl=rel.lastIndexOf("/");
+    var k="#"+((sl<0)?"":rel.substring(0,sl));          // "#"-prefixed: keys are archive-supplied paths
+    var a=idx[k]; if(!a){ a=[]; idx[k]=a; }
+    a.push({rel:rel, name:(sl<0)?rel:rel.substring(sl+1), size:TOC[i].size}); }
+  TOCDIR=idx; return idx;
+}
+function tocChildren(dir){ return tocDirIndex()["#"+String(dir).replace(/\/+$/,"")] || []; }
+function tocSorted(){
+  if(TOCSORT) return TOCSORT;
+  var a=[]; for(var i=0;i<TOC.length;i++) a.push(TOC[i]);
+  a.sort(function(x,y){ return x.rel<y.rel?-1:(x.rel>y.rel?1:0); });
+  TOCSORT=a; return a;
+}
+/* Members whose rel starts with `pre`, as a contiguous [lo,hi) range of the rel-sorted copy.
+   "￿" sorts above every character a member name can contain (control chars and backslashes are
+   already rejected at index time by tocRelBad), so pre+"￿" is the first string past the block. */
+function tocRange(pre){
+  var a=tocSorted();
+  function lb(s){ var lo=0, hi=a.length; while(lo<hi){ var m=(lo+hi)>>1; if(a[m].rel<s) lo=m+1; else hi=m; } return lo; }
+  return {a:a, lo:lb(pre), hi:lb(pre+"￿")};
 }
 function cacheToc(archive){
   try{ var out=["# "+archive+" | "+fileSize(archive), "__PREFIX__="+PREFIX+"\t0"];
@@ -1218,7 +1272,7 @@ function finishToc(input){
 /* ---- tree mode: probe only the catalog paths (no full-tree walk) ---- */
 function runTree(input){
   ROOT=findTreeRoot(input); if(!ROOT){ setStatus("No bundle root (README) found under that folder.","err"); return; }
-  PREFIX=baseName(ROOT); TOC=[]; TOCMAP={};
+  PREFIX=baseName(ROOT); TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null;
   detectTypeTree();
   buildInventory();     // buildInventory branches on MODE for presence/size
   parseNode();
@@ -1256,7 +1310,7 @@ function detectTypeTree(){
   else { var rd=readMember("README"); if(/vc-support/i.test(rd)) BTYPE="vcsa"; else if(/vm-support/i.test(rd)) BTYPE="esxi"; }
   if(!BTYPE){ if(/^esx-/i.test(PREFIX)) BTYPE="esxi"; else if(/^vc-/i.test(PREFIX)||/vcsa/i.test(PREFIX)) BTYPE="vcsa"; }
 }
-function hasPrefixToc(pre){ for(var i=0;i<TOC.length;i++){ if(TOC[i].rel.indexOf(pre)===0) return true; } return false; }
+function hasPrefixToc(pre){ var r=tocRange(pre); return r.hi>r.lo; }
 function typeLabel(){ return BTYPE==="esxi"?"ESXi":(BTYPE==="vcsa"?"vCenter (VCSA)":"Unknown"); }
 function curCatalog(){ return BTYPE==="vcsa"?CAT_VCSA:CAT_ESXI; }
 
@@ -1272,9 +1326,9 @@ function firstPresentFile(rels){   // returns {rel,size} of first existing plain
 function firstPatternFile(pre, patSrc){
   pre=pre.replace(/\/+$/,"")+"/"; var re; try{ re=new RegExp(patSrc); }catch(e){ return null; }
   var best=null;
-  if(MODE==="toc"){ for(var i=0;i<TOC.length;i++){ var rel=TOC[i].rel; if(rel.indexOf(pre)!==0) continue;
-      if(rel.indexOf("/", pre.length)>=0) continue;   // direct children only
-      if(!re.test(baseName(rel))) continue; if(!best||TOC[i].size>best.size) best={rel:rel, size:TOC[i].size}; } }
+  if(MODE==="toc"){ var kids=tocChildren(pre);        // direct children only, straight off the index
+    for(var i=0;i<kids.length;i++){ if(!re.test(kids[i].name)) continue;
+      if(!best||kids[i].size>best.size) best={rel:kids[i].rel, size:kids[i].size}; } }
   else { var dir=ROOT+"\\"+winRel(pre); if(folderExists(dir)){ var fso=new ActiveXObject("Scripting.FileSystemObject");
       try{ var e=new Enumerator(fso.GetFolder(dir).Files); for(; !e.atEnd(); e.moveNext()){ var f=e.item();
         if(!re.test(f.Name+"")) continue; if(!best||f.Size>best.size) best={rel:pre+(f.Name+""), size:f.Size}; } }catch(x){} } }
@@ -1283,7 +1337,7 @@ function firstPatternFile(pre, patSrc){
 function dirStats(pre){   // sum size + count files under a prefix
   pre=pre.replace(/\/+$/,"")+"/";
   var total=0, cnt=0;
-  if(MODE==="toc"){ for(var i=0;i<TOC.length;i++){ if(TOC[i].rel.indexOf(pre)===0){ total+=TOC[i].size; cnt++; } } }
+  if(MODE==="toc"){ var r=tocRange(pre); for(var i=r.lo;i<r.hi;i++){ total+=r.a[i].size; cnt++; } }   // whole subtree
   else { var dir=ROOT+"\\"+winRel(pre); if(folderExists(dir)){ var r=treeCount(dir); total=r.size; cnt=r.count; } }
   return {size:total, count:cnt};
 }
@@ -1291,6 +1345,10 @@ function dirStats(pre){   // sum size + count files under a prefix
    reparse-looping extracted tree that is a stack-overflow / resource-exhaustion path that closes the
    app with no catchable error. Now one hoisted FSO, a depth cap, a node budget, and reparse-skip. */
 var TREECOUNT_MAXDEPTH=40, TREECOUNT_BUDGET=200000;
+/* Shared bounds for the SMALLER tree walkers (systemd units, vmfs scans, ransom-note scan). Every
+   recursive walker in this file must carry all three guards - depth cap, node budget and
+   reparse-point skip - because an extracted tree can contain junctions that self-reference. */
+var WALK_MAXDEPTH=12, WALK_BUDGET=40000;
 function treeCount(dir){ var fso=new ActiveXObject("Scripting.FileSystemObject"), budget={n:0};
   function rec(d, depth){ var size=0, count=0;
     if(depth>TREECOUNT_MAXDEPTH || budget.n>TREECOUNT_BUDGET) return {size:0,count:0};
@@ -1332,12 +1390,18 @@ function extractMembersToc(rels){    // batch-extract members into EXDIR (recrea
 function extractedPath(rel){ return EXDIR+"\\"+winRel(PREFIX)+"\\"+winRel(rel); }
 function sourcePath(rel){ return MODE==="tree" ? (ROOT+"\\"+winRel(rel)) : extractedPath(rel); }
 function readMember(rel){
+  var mk="#"+rel, hit=MEMCACHE[mk];                     // "#"-prefixed: keys are archive member paths
+  if(hit!=null) return hit;
+  var txt="";
   try{
-    if(MODE==="tree"){ var p=ROOT+"\\"+winRel(rel); return fileExists(p)?readUtf8(p):catMember(rel); }
-    var ep=extractedPath(rel); if(!fileExists(ep)){ if(TOCMAP[rel]==null) return ""; extractMembersToc([rel]); }
-    if(fileExists(ep)) return readUtf8(ep);
-    return catMember(rel);   // deep / MAX_PATH fallback
+    if(MODE==="tree"){ var p=ROOT+"\\"+winRel(rel); txt = fileExists(p)?readUtf8(p):catMember(rel); }
+    else {
+      var ep=extractedPath(rel); if(!fileExists(ep)){ if(TOCMAP[rel]==null) return ""; extractMembersToc([rel]); }
+      txt = fileExists(ep) ? readUtf8(ep) : catMember(rel);   // deep / MAX_PATH fallback
+    }
   }catch(e){ return ""; }
+  if(MEMCACHE_N<MEMCACHE_MAX && txt.length<=MEMCACHE_MAXLEN){ MEMCACHE[mk]=txt; MEMCACHE_N++; }
+  return txt;
 }
 /* union of every file the analysis parsers read - resolved with the SAME helpers the parsers use
    (resolveLog / rotationsOf / auditRotations / envoyFrontLog), so the up-front extract pass matches
@@ -1397,7 +1461,7 @@ function analysisRels(){
     add(resolveLog(["var/log/vmware/applmgmt-audit/applmgmt-audit.log"]));                // VAMI appliance-mgmt audit
     if(DEEPROT){ try{ var ar=listUnder("var/log/vmware/applmgmt-audit/",/^applmgmt-audit\.log\.\d+\.gz$/i); for(var aj=0;aj<ar.length;aj++) add("var/log/vmware/applmgmt-audit/"+ar[aj]); }catch(eA){} }
     try{ var su=systemdUnitRels(); for(var sj=0;sj<su.length;sj++) add(su[sj]); }catch(eS){}   // systemd unit sweep
-    try{ for(var pj=0;pj<TOC.length;pj++){ if(/^etc\/pam\.d\/[^\/]+$/i.test(TOC[pj].rel)) add(TOC[pj].rel); } }catch(eP){}   // PAM stack sweep (tiny files, captured in full)
+    try{ var pmk=tocChildren("etc/pam.d"); for(var pj=0;pj<pmk.length;pj++) add(pmk[pj].rel); }catch(eP){}   // PAM stack sweep (tiny files, captured in full)
     try{ var dsets=drmDumpSets(); addAll(dsets.latest||[]); addAll(dsets.earliest||[]); }catch(eD){}   // VMs-from-logs: DRS dumps
     try{ var hp="var/log/vmware/vsan-health/", hn=listUnder(hp,/-cloud_health_check_data\.json\.gz$/i), ob=listUnder(hp,/_obfuscationTableForHuman\.json\.gz$/i);
       if(hn.length) add(hp+hn[0]); for(var oo=0;oo<ob.length;oo++) add(hp+ob[oo]); }catch(eH){}        // VMs-from-logs: vSAN-health baseline
@@ -1662,7 +1726,9 @@ function parseVmwareLogs(){
         else if(/Connecting to.*\.iso/i.test(ln)){ var iso=(ln.match(/Connecting to\s+([^\s,]+\.iso)/i)||[])[1]||""; ev={k:"other", w:"ISO image mounted"+(iso?(" - "+trunc(baseName(iso),50)):"")}; }
         if(!ev) continue;
         var via=opid?(/^esxui/i.test(opid)?"ESXi Host Client":(/^host-/i.test(opid)?"vCenter task":opid)):"";
-        VMEV.push(mkVmEv(ep,tm[1],vmName,ev.k,ev.w,"vmware.log",via?"":"",via,"vmware.log")); added++; perVm++; }
+        /* actor is always "": vmware.log records the VMX's own view and never names a principal.
+           The opID (via) is the only attribution it carries. (Was written as `via?"":""`.) */
+        VMEV.push(mkVmEv(ep,tm[1],vmName,ev.k,ev.w,"vmware.log","",via,"vmware.log")); added++; perVm++; }
       txt=null; lines=null;                     // drop the file's buffers before the next VM
       if((files & 7)===0) gcNow();              // and reclaim every 8th file - keeps peak bounded on a constrained host
     }
@@ -1914,10 +1980,18 @@ function parseNode(){
    Parsers validated against real ESXi + VCSA logs (see BUILD-NOTES).
    ============================================================ */
 function resolveLog(rels, pat){ if(pat){ var pf=firstPatternFile(rels[0],pat); return pf?pf.rel:""; } var f=firstPresentFile(rels); return f?f.rel:""; }
-function readCappedText(path, cap){ try{
-    if(FILE_IO==="adodb"){ var st=new ActiveXObject("ADODB.Stream"); st.Type=2; st.Charset="utf-8"; st.Open(); st.LoadFromFile(path);
+/* Dropping FILE_IO to "fso" is a SESSION-WIDE decision with evidential cost: it halves LOGCAP
+   (48 MB -> 8 MB, i.e. less of every large log is read) and switches decoding from UTF-8 to the
+   system ANSI codepage. Only a Windows ZONE refusal justifies it - and it must say so, like
+   readUtf8 does. This used to downgrade on ANY error because the zone test was written as
+   `if(!/.../.test(...)){}` - an empty body - so a single locked / over-long / missing path
+   silently shrank every subsequent read for the rest of the run, with nothing on screen. */
+function readCappedText(path, cap){
+  if(FILE_IO==="adodb"){
+    try{ var st=new ActiveXObject("ADODB.Stream"); st.Type=2; st.Charset="utf-8"; st.Open(); st.LoadFromFile(path);
       var t=st.ReadText(cap); st.Close(); return t; }
-  }catch(e){ if(!/safety settings|data source/i.test(e.message||"")){} FILE_IO="fso"; }
+    catch(e){ if(/safety settings|data source/i.test(e.message||"")){ FILE_IO="fso"; zoneNote(); } }
+  }
   try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); var f=fso.OpenTextFile(path,1,false,0); var out=f.Read(cap); f.Close(); return out; }catch(e2){ return ""; }
 }
 /* return lines of a catalog log; decompress .gz/.zst on demand; cap huge logs */
@@ -1939,25 +2013,33 @@ function logLines(rel, capOverride, noCache){
     txt=readCappedText(src, half)
       +"\n#### TRUNCATED: "+fmtSize(sz-cap)+" in the middle of this log was not read (head+tail of a "+fmtSize(sz)+" file) ####\n"
       +readTailText(src, half);
-    LOG_TRUNC.push(baseName(rel)+" ("+fmtSize(sz)+", read first+last "+fmtSize(half)+")");
+    LOG_TRUNC.push(baseName(rel)+" ("+fmtSize(sz)+", read first+last "+fmtSize(half)+"; tail decoded as ANSI - see readTailText)");
   }
   else { try{ txt=readUtf8(src); }catch(e){ appendLog("  log "+rel+" -> read error: "+e.message); return []; } }
   var a=String(txt).split("\n"); for(var i=0;i<a.length;i++){ if(a[i].charAt(a[i].length-1)==="\r") a[i]=a[i].substring(0,a[i].length-1); }
   appendLog("  log "+rel+" -> "+nf(a.length)+" lines");
-  if(!noCache && sz>=0 && (LOGCACHE_BYTES+sz)<=LOGCACHE_MAX){ LOGCACHE[ck]=a; LOGCACHE_BYTES+=sz; }   // over budget: just read again next time
+  /* Budget the JS FOOTPRINT, not the file size. A line array holds UTF-16 strings plus a per-string
+     object header, so a 30 MB log costs 67 MB+ live - counting file bytes made LOGCACHE_MAX ~2.2x
+     looser than it reads, which is exactly the slack v1.17.3 lowered the ceiling to remove. */
+  if(!noCache && sz>=0){ var cost=logCacheCost(sz, a.length);
+    if((LOGCACHE_BYTES+cost)<=LOGCACHE_MAX){ LOGCACHE[ck]=a; LOGCACHE_BYTES+=cost; } }   // over budget: just read again next time
   return a;
 }
 /* ---------- rotation-aware log reading ----------
    Live logs cover days; the rotations (hostd.0.gz .. hostd.9.gz) cover WEEKS. Off by default
    (#deepRot) except callers that always want rotations (vobd - the audit log - is small). */
 var DEEPROT=false, MAXROT=12;
+var ROT_DIRS=["var/run/log","scratch/log","var/log"];
 function rotationsOf(rel){
   var base=baseName(rel).replace(/\.log$/i,"");
-  var re=new RegExp("^(?:var/run/log|scratch/log|var/log)/"+base.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\.(\\d+)(?:\\.gz)?$","i");
+  var bre=new RegExp("^"+base.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\.(\\d+)(?:\\.gz)?$","i");
   var found={}, i;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ var m=TOC[i].rel.match(re); if(!m) continue; var n=parseInt(m[1],10);
-      if(found[n]==null || TOC[i].rel.indexOf("var/run/log/")===0) found[n]=TOC[i].rel; } }   // rotations are duplicated under var/run/log + scratch/log - keep one copy
-  else { var dirs=["var/run/log","scratch/log","var/log"];
+  /* three directory lookups instead of a regex over every member of the index; rotations are
+     duplicated under var/run/log + scratch/log, so var/run/log still wins for each sequence number. */
+  if(MODE==="toc"){ for(var dd=0;dd<ROT_DIRS.length;dd++){ var kids=tocChildren(ROT_DIRS[dd]);
+      for(i=0;i<kids.length;i++){ var m=kids[i].name.match(bre); if(!m) continue; var n=parseInt(m[1],10);
+        if(found[n]==null || ROT_DIRS[dd]==="var/run/log") found[n]=kids[i].rel; } } }
+  else { var dirs=ROT_DIRS;
     for(var d=0;d<dirs.length;d++){ var names=listUnder(dirs[d]+"/", new RegExp("^"+base.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\.\\d+(\\.gz)?$","i"));
       for(i=0;i<names.length;i++){ var mm=names[i].match(/\.(\d+)(?:\.gz)?$/); if(mm){ var n2=parseInt(mm[1],10); if(found[n2]==null) found[n2]=dirs[d]+"/"+names[i]; } } } }
   var nums=[]; for(var k in found){ if(found.hasOwnProperty(k)) nums.push(parseInt(k,10)); }
@@ -1977,12 +2059,20 @@ function logLinesRot(rel, force){
 }
 /* read the LAST `cap` bytes of a text file (for huge append-only logs where the newest entries are
    at the tail). The first (partial) line after the skip is a fragment - parsers that require a full
-   line structure drop it naturally. */
+   line structure drop it naturally.
+   ENCODING CAVEAT, disclosed rather than papered over: FSO is the only reader here that can SEEK
+   without loading the file, and its text mode decodes through the system ANSI codepage, not UTF-8.
+   So the tail half of a capped log is ANSI-decoded while its head half (readCappedText) is UTF-8 -
+   any non-ASCII in the tail (accented VM names, non-Latin principals) is mangled. The fix is not
+   free: ADODB.Stream has no partial LoadFromFile, so decoding the tail as UTF-8 would mean loading
+   the WHOLE multi-hundred-MB log into memory, which is precisely the pressure v1.17.3/v1.17.4 were
+   fighting. Correct ASCII beats an OOM, so the read stays as-is and logLines() states it in the
+   truncation banner. */
 function readTailText(path, cap){
   try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); var sz=0; try{ sz=fso.GetFile(path).Size; }catch(es){}
     var f=fso.OpenTextFile(path,1,false,0); if(sz>cap){ try{ f.Skip(sz-cap); }catch(e2){} }
     var t=""; try{ t=f.ReadAll(); }catch(e3){ t=""; } f.Close(); return t;
-  }catch(e){ return ""; }
+  }catch(e){ appendLog("  tail read failed for "+baseName(path)+": "+(e&&e.message?e.message:e)+" - only the head of this log was read."); return ""; }
 }
 /* ---------- vpxd log set (v1.15.0) ----------
    vpxd is THE vCenter audit trail, and it was read as "the single largest vpxd-N.log": vpxd.log and
@@ -1994,10 +2084,9 @@ function readTailText(path, cap){
 var VPXD_KEEP=4, VPXD_KEEP_DEEP=12, VPXD_OLDCAP=16*1024*1024;
 function vpxdAllRels(){
   var pre="var/log/vmware/vpxd/", re=/^vpxd(?:-(\d+))?\.log(\.gz|\.zst)?$/i, list=[], i, m;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ var rel=TOC[i].rel; if(rel.indexOf(pre)!==0) continue;
-      if(rel.indexOf("/",pre.length)>=0) continue;                       // direct children only
-      m=baseName(rel).match(re); if(!m) continue;
-      list.push({rel:rel, n:(m[1]?parseInt(m[1],10):1e9)}); } }
+  if(MODE==="toc"){ var kids=tocChildren(pre);                           // direct children only
+    for(i=0;i<kids.length;i++){ m=kids[i].name.match(re); if(!m) continue;
+      list.push({rel:kids[i].rel, n:(m[1]?parseInt(m[1],10):1e9)}); } }
   else { var names=listUnder(pre, re);
     for(i=0;i<names.length;i++){ m=names[i].match(re); if(!m) continue;
       list.push({rel:pre+names[i], n:(m[1]?parseInt(m[1],10):1e9)}); } }
@@ -2060,6 +2149,16 @@ function parseTerms(t){ var p=String(t).split(/[\r\n,;]+/), o=[]; for(var i=0;i<
    shape. filename / path / keyword remain substring - that is what those types mean. IOC.txt (the
    family wire format) is unchanged; only the MATCHING got stricter. */
 var IOC_M=[];   // aligned matchers: {v, t, re|null} - null re means substring
+/* ONE alternation over every term, used only as a GATE (v1.17.5). The sweep is the hottest loop in
+   the app - it ran N regex tests on EVERY line of five logs, and a vpxd set is 500k+ lines. Measured
+   at 200k lines: 10 terms 67ms / 50 terms 328ms / 200 terms 1,463ms; with the gate, 10ms / 32ms /
+   46ms (a 32x cut at 200 terms) because ~everything is rejected by one native regex pass.
+   The per-term loop below still decides WHICH term matched, so verdicts are byte-identical - the
+   gate can only ever be a superset. IOC_ANY_I is the case-insensitive form, tested against the RAW
+   line so the sweep does not have to allocate a lowercased copy of every line it is about to reject.
+   (Counter-intuitively, gating with indexOf instead measured SLOWER than the original - hence a
+   regex alternation rather than the obvious literal pre-check.) */
+var IOC_ANY=null, IOC_ANY_I=null, IOC_ALT_MAX=32768;   // give up on the gate past this source size
 function iocRegexEsc(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
 function iocInferType(v){
   if(iocIsIpv4(v)) return "ip";
@@ -2077,12 +2176,30 @@ function iocCompile(v,t){
   return null;
 }
 function iocBuildMatchers(rows){   // rows: [{v,t}]
-  IOC_M=[]; IOCS=[]; var seen={};
-  for(var i=0;i<rows.length;i++){ var v=lc(trimStr(rows[i].v)); if(!v||seen[v]) continue; seen[v]=1;
+  IOC_M=[]; IOCS=[]; IOC_ANY=null; IOC_ANY_I=null; var seen={}, alts=[];
+  for(var i=0;i<rows.length;i++){ var v=lc(trimStr(rows[i].v)); if(!v||seen["#"+v]) continue; seen["#"+v]=1;
     var t=(rows[i].t && rows[i].t!=="keyword") ? rows[i].t : iocInferType(v);
-    IOCS.push(v); IOC_M.push({v:v, t:t, re:iocCompile(v,t)}); }
+    var re=iocCompile(v,t);
+    IOCS.push(v); IOC_M.push({v:v, t:t, re:re});
+    alts.push(re ? ("(?:"+re.source+")") : ("(?:"+iocRegexEsc(v)+")")); }
+  var srcAll=alts.join("|");
+  if(srcAll && srcAll.length<=IOC_ALT_MAX){
+    try{ IOC_ANY=new RegExp(srcAll); IOC_ANY_I=new RegExp(srcAll,"i"); }
+    catch(eR){ IOC_ANY=null; IOC_ANY_I=null; }        // no gate - correctness never depended on it
+  }
 }
-function iocMatchLine(low){ for(var i=0;i<IOC_M.length;i++){ var m=IOC_M[i]; if(m.re ? m.re.test(low) : (low.indexOf(m.v)>=0)) return m; } return null; }
+function iocMatchLine(low){
+  if(IOC_ANY && !IOC_ANY.test(low)) return null;      // gate: cheap reject for ~every line
+  for(var i=0;i<IOC_M.length;i++){ var m=IOC_M[i]; if(m.re ? m.re.test(low) : (low.indexOf(m.v)>=0)) return m; } return null; }
+/* Raw-line entry point for the sweep. The matchers are built from LOWERCASED values and the char
+   classes they use ([^0-9.] / [^0-9a-f] / [^a-z0-9-]) are letter-case symmetric under /i, so the
+   case-insensitive gate accepts exactly the lines the lowercased gate would - it just does not need
+   the lowercased copy to find that out. Confirmation still happens on lc(raw). */
+function iocMatchRaw(raw){
+  if(!IOC_M.length) return null;
+  if(IOC_ANY_I && !IOC_ANY_I.test(raw)) return null;
+  return iocMatchLine(lc(raw));
+}
 function loadToolkitIoc(){
   try{
     var base=htaFolder(); if(!base) return;
@@ -2233,7 +2350,9 @@ function ipIsLocal(ip){ ip=String(ip||""); if(ip===""||ip==="*") return true;
   return false; }
 /* loopback-only address (127.0.0.0/8 or IPv6 ::1, incl. the ::ffff:127.x IPv4-mapped form) - not reachable off-host */
 function isLoopback(ip){ ip=String(ip||""); return /^127\./.test(ip)||ip==="::1"||/^::ffff:127\./i.test(ip); }
-function isPrivUser(u){ u=lc(u); return u==="root"||u.indexOf("administrator@")===0||u==="administrator"||u==="vpxuser"===false&&/admin/.test(u); }
+/* (isPrivUser removed in v1.17.5: never called, and its last clause read `u==="vpxuser"===false&&...`
+   - which happens to evaluate to `u!=="vpxuser" && /admin/`, but only by accident. Privileged-account
+   scoring lives in scoreLogon()'s PRIV rule, which is the one actually used.) */
 /* ESXi attacker/ransomware command tells */
 /* ---- shell/sudo command scoring ----------------------------------------------------------------
    Returns null, or {s:<score>, why:"<reason>"}. TIERED, because a single routine power-off is not the
@@ -2533,28 +2652,42 @@ function bfAnalyze(){
     if(best>=need){ res.bursts.push({ip:p.ip,user:p.user,n:best,when:bestAt?bestAt.when:"",ext:!!(p.ip&&!ipIsLocal(p.ip))});
       for(i=0;i<p.rows.length;i++){ p.rows[i].bf="burst"; } } }
 
-  /* SPRAY: one ip, many DISTINCT users in a window */
+  /* SPRAY: one ip, many DISTINCT users in a window.
+     Sliding window with a per-user occurrence count, so each row is entered and left exactly once.
+     The previous form rescanned forward from EVERY row and allocated a fresh seen{} each time - i.e.
+     O(n^2) with n allocations, where n is the failure count from a single IP. Measured (V8; JScript
+     in mshta is far slower): 1k -> 118 ms, 2k -> 459 ms, 4k -> 1.8 s, 8k -> 7.4 s. n is largest
+     exactly when the host IS being sprayed, and in fleet mode this runs inside the synchronous
+     per-host block. Same maxima as before: every window of width <= BF_SPRAY_WIN is [s2..i] for its
+     own last element, so anchoring on the window END enumerates the same candidate sets. */
   var ips={};
-  for(i=0;i<fails.length;i++){ r=fails[i]; if(!r.ip) continue; var ik=lc(r.ip);
+  for(i=0;i<fails.length;i++){ r=fails[i]; if(!r.ip) continue; var ik="#"+lc(r.ip);
     if(!ips[ik]) ips[ik]={ip:r.ip,rows:[]}; ips[ik].rows.push(r); }
   for(var ik2 in ips){ if(!ips.hasOwnProperty(ik2)) continue; var q=ips[ik2];
-    var bestU=0, atU=null;
-    for(i=0;i<q.rows.length;i++){ var seen={}, c=0;
-      for(j=i;j<q.rows.length && q.rows[j].epoch-q.rows[i].epoch<=BF_SPRAY_WIN;j++){
-        var u=lc(q.rows[j].user||"?"); if(!seen[u]){ seen[u]=1; c++; } }
-      if(c>bestU){ bestU=c; atU=q.rows[i]; } }
+    var bestU=0, atU=null, cnt={}, distinct=0, s2=0;
+    for(i=0;i<q.rows.length;i++){
+      var uk="#"+lc(q.rows[i].user||"?");
+      if(cnt[uk]) cnt[uk]++; else { cnt[uk]=1; distinct++; }
+      while(q.rows[i].epoch-q.rows[s2].epoch>BF_SPRAY_WIN){
+        var ok2="#"+lc(q.rows[s2].user||"?");
+        if(--cnt[ok2]===0){ delete cnt[ok2]; distinct--; }
+        s2++; }
+      if(distinct>bestU){ bestU=distinct; atU=q.rows[s2]; } }
     if(bestU>res.worstSpray) res.worstSpray=bestU;
     if(bestU>=BF_SPRAY_USERS){ res.sprays.push({ip:q.ip,users:bestU,when:atU?atU.when:"",ext:!!(q.ip&&!ipIsLocal(q.ip))});
       for(i=0;i<q.rows.length;i++){ q.rows[i].bf=q.rows[i].bf||"spray"; } } }
 
-  /* BREACH: a flagged ip then succeeds shortly after - guessing that worked */
-  var hot={}; for(i=0;i<res.bursts.length;i++) hot[lc(res.bursts[i].ip||"?")]=1;
-  for(i=0;i<res.sprays.length;i++) hot[lc(res.sprays[i].ip||"?")]=1;
-  for(i=0;i<oks.length;i++){ var o=oks[i]; if(!o.ip || !hot[lc(o.ip)]) continue;
-    for(j=0;j<fails.length;j++){ var f=fails[j];
-      if(lc(f.ip||"")!==lc(o.ip)) continue;
-      if(o.epoch>=f.epoch && (o.epoch-f.epoch)<=BF_WIN){
-        res.breaches.push({ip:o.ip,user:o.user,when:o.when}); o.bf="breach"; break; } } }
+  /* BREACH: a flagged ip then succeeds shortly after - guessing that worked.
+     oks and each IP's failure list are both epoch-sorted, so one advancing pointer per IP replaces
+     the old "rescan every failure for every success" (O(oks x fails)). */
+  var hot={}; for(i=0;i<res.bursts.length;i++) hot["#"+lc(res.bursts[i].ip||"?")]=1;
+  for(i=0;i<res.sprays.length;i++) hot["#"+lc(res.sprays[i].ip||"?")]=1;
+  var ptr={};
+  for(i=0;i<oks.length;i++){ var o=oks[i]; if(!o.ip) continue; var hk="#"+lc(o.ip); if(!hot[hk]) continue;
+    var frows=(ips[hk]||{rows:[]}).rows, p=ptr[hk]||0;
+    while(p<frows.length && frows[p].epoch < o.epoch-BF_WIN) p++;   // drop failures older than the window
+    ptr[hk]=p;
+    if(p<frows.length && frows[p].epoch<=o.epoch){ res.breaches.push({ip:o.ip,user:o.user,when:o.when}); o.bf="breach"; } }
   return res;
 }
 /* apply the cluster verdict to the member rows: only rows that are PART of a real burst/spray get
@@ -2728,8 +2861,8 @@ function parseSsoAudit(){
    commands deduped, so only genuinely unusual execs survive. ---- */
 var AUDIT_ROUTINE=/vmware|sudo_py_vmw|createDBRole|createcertificate|\/usr\/lib\/vmware|vmafd|vmdir|vpxd|likewise|\/opt\/vmware|observability|lastlog|python3?(\.\d+)?$|logrotate|systemctl|vami|applmgmt/i;
 function auditRotations(){
-  var out=[], i, re=/^var\/log\/audit\/audit\.log[.\-]/i;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ if(re.test(TOC[i].rel)) out.push(TOC[i].rel); } }
+  var out=[], i, re=/^audit\.log[.\-]/i;
+  if(MODE==="toc"){ var kids=tocChildren("var/log/audit"); for(i=0;i<kids.length;i++){ if(re.test(kids[i].name)) out.push(kids[i].rel); } }
   else { var names=listUnder("var/log/audit/", /^audit\.log/i); for(i=0;i<names.length;i++) out.push("var/log/audit/"+names[i]); }
   out.sort(); return out;   // epoch-suffixed -> lexical sort = chronological
 }
@@ -2842,8 +2975,9 @@ var WEB_HIDELOOP=false;    // hide loopback (127.0.0.1 / ::1) clients in the web
 var SUS_PATH=/\.\.(\/|%2f)|%2e%2e|jndi:|\$\{|\/etc\/passwd|\bunion\s+select|<script|\bcmd=|\/bin\/(sh|bash)|powershell|\.\.;|\/cgi-bin\/|\benv\b.*=.*\(|wget\s|curl\s.*\|/i;
 function envoyFrontLog(){
   var live="", best="", bestN=-1, i, m;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ var r=TOC[i].rel; m=r.match(/^var\/log\/vmware\/envoy\/envoy-access-(\d+)\.log(\.gz)?$/i); if(!m) continue;
-      if(!m[2]) live=r; else { var n=parseInt(m[1],10); if(n>bestN){ bestN=n; best=r; } } } }
+  if(MODE==="toc"){ var kids=tocChildren("var/log/vmware/envoy");
+    for(i=0;i<kids.length;i++){ m=kids[i].name.match(/^envoy-access-(\d+)\.log(\.gz)?$/i); if(!m) continue;
+      if(!m[2]) live=kids[i].rel; else { var n=parseInt(m[1],10); if(n>bestN){ bestN=n; best=kids[i].rel; } } } }
   else { var names=listUnder("var/log/vmware/envoy/", /^envoy-access-\d+\.log(\.gz)?$/i);
     for(i=0;i<names.length;i++){ m=names[i].match(/envoy-access-(\d+)\.log(\.gz)?$/i); if(!m) continue;
       if(!m[2]) live="var/log/vmware/envoy/"+names[i]; else { var n2=parseInt(m[1],10); if(n2>bestN){ bestN=n2; best="var/log/vmware/envoy/"+names[i]; } } } }
@@ -2972,8 +3106,10 @@ function sweepIocs(){
     ? [["var/log/auth.log"],["var/log/vmware/sso/websso.log"],["var/log/vmware/sso/tokenservice.log"],["var/log/vmware/vmdird/vmdird.log"],["var/log/vmware/messages","var/log/messages"]]
     : [["var/run/log/auth.log","scratch/log/auth.log","var/log/auth.log"],["var/run/log/shell.log","scratch/log/shell.log","var/log/shell.log"],["var/run/log/hostd.log","scratch/log/hostd.log","var/log/hostd.log"],["var/run/log/vpxa.log","scratch/log/vpxa.log","var/log/vpxa.log"],["var/run/log/vobd.log","scratch/log/vobd.log","var/log/vobd.log"]];
   for(var j=0;j<logs.length;j++){ var rel=resolveLog(logs[j]); if(!rel) continue; var lines=logLines(rel);
-    for(var L=0;L<lines.length;L++){ var low=lc(lines[L]); var mt=iocMatchLine(low);
-      if(mt){ IOCHITS.push({file:baseName(rel),line:(L+1),ioc:mt.v,ioctype:mt.t,excerpt:trimStr(trunc(lines[L],300)),blob:low});
+    /* iocMatchRaw gates on the RAW line, so the lowercased copy is only allocated for lines that can
+       actually match - previously every line of every swept log was lowercased first. */
+    for(var L=0;L<lines.length;L++){ var mt=iocMatchRaw(lines[L]);
+      if(mt){ IOCHITS.push({file:baseName(rel),line:(L+1),ioc:mt.v,ioctype:mt.t,excerpt:trimStr(trunc(lines[L],300)),blob:lc(lines[L])});
         if(IOCHITS.length>=8000){
           /* stopping mid-log is an EVIDENTIAL GAP, not a display nicety - everything after this
              point, including whole logs, was never swept. Record exactly where it stopped. */
@@ -3028,7 +3164,7 @@ function pamFlagOf(line){
 }
 function sshKeyFiles(){   // ESXi per-user authorized_keys members: etc/ssh/keys-<user>/authorized_keys
   var out=[], re=/^etc\/ssh\/keys-([^\/]+)\/authorized_keys$/i, i, m;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ m=TOC[i].rel.match(re); if(m) out.push({rel:TOC[i].rel, user:m[1]}); } }
+  if(MODE==="toc"){ var r=tocRange("etc/ssh/"); for(i=r.lo;i<r.hi;i++){ m=r.a[i].rel.match(re); if(m) out.push({rel:r.a[i].rel, user:m[1]}); } }
   else { try{ var fso=new ActiveXObject("Scripting.FileSystemObject"), base=ROOT+"\\etc\\ssh";
       if(fso.FolderExists(base)){ var e=new Enumerator(fso.GetFolder(base).SubFolders);
         for(; !e.atEnd(); e.moveNext()){ var nm=e.item().Name+""; var mm=nm.match(/^keys-(.+)$/i);
@@ -3038,9 +3174,15 @@ function sshKeyFiles(){   // ESXi per-user authorized_keys members: etc/ssh/keys
 function parseUsersV(){
   USERSV=[]; PAM_FINDS=null; PAM_SCANNED=0;
   var map={}, i, j, t;
+  /* "#" prefix: the key is an ACCOUNT NAME out of etc/passwd, etc/group or a log line - i.e. bundle
+     data from a potentially compromised host, exactly the input v1.15.0's member-name validation
+     treats as hostile. On a bare {} the names constructor / toString / valueOf / hasOwnProperty all
+     read back TRUTHY from Object.prototype, so `if(map[k]) return map[k]` handed back a prototype
+     member instead of creating a row: the account vanished from the Users tab and the row fields were
+     written onto a shared object. Prefixing puts every key in its own namespace. */
   function urow(u){
     u=trimStr(String(u||"")); if(!u) return null;
-    var k=lc(u); if(map[k]) return map[k];
+    var k="#"+lc(u); if(map[k]) return map[k];
     var r={user:u, srcs:{}, uid:-1, shell:"", home:"", groups:[], keys:-1,
            ok:0, fail:0, sess:0, acts:0, extIps:{}, ips:{}, methods:{},
            firstEp:0, lastEp:0, score:0, tags:[], reasons:[], blob:""};
@@ -3127,8 +3269,8 @@ function parseUsersV(){
   }
   USERSV.sort(function(a,b){ return (b.score-a.score) || (lc(a.user)<lc(b.user)?-1:1); });
   // ---- PAM stack sweep (vc-support captures etc/pam.d in full; vm-support does not) ----
-  var pamRels=[], reP=/^etc\/pam\.d\/[^\/]+$/i;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ if(reP.test(TOC[i].rel)) pamRels.push(TOC[i].rel); } }
+  var pamRels=[];
+  if(MODE==="toc"){ var pk=tocChildren("etc/pam.d"); for(i=0;i<pk.length;i++) pamRels.push(pk[i].rel); }
   else { var names=listUnder("etc/pam.d/", /./); for(i=0;i<names.length;i++) pamRels.push("etc/pam.d/"+names[i]); }
   if(pamRels.length){
     PAM_FINDS=[]; PAM_SCANNED=pamRels.length;
@@ -3207,11 +3349,28 @@ function runAnalysis(){
     }catch(e2){ BUSY=false; $("anBtn").disabled=false; setStatus("Analysis phase failed: "+e2.message,"err"); } }, 30);
   }, 30);
 }
-function rescoreAnalysis(){ var i; for(i=0;i<LOGON.length;i++) scoreLogon(LOGON[i]); for(i=0;i<ACTIONS.length;i++) scoreAction(ACTIONS[i]); buildTimeline(); }
+/* A case-window change alters what bfAnalyze() sees - it filters on inWin() precisely so "the
+   indicator must agree with the tab" - so the brute-force verdict, its BURST/SPRAY/BREACH tags and
+   the +3/+5 those add have to be rebuilt when the window moves. Without this the panel described the
+   window that was set at ANALYSIS time while the table showed the new one.
+   Order matters and is the reason the old rescoreAnalysis() (dead code, never called) was wrong:
+   scoreLogon() RESETS score/tags/reasons, so it must run BEFORE bfApply(), never after - calling it
+   afterwards silently erased every brute-force tag bfApply had just applied. */
+function rescoreForWindow(){
+  if(!ANALYZED || BUSY) return;
+  var i;
+  for(i=0;i<LOGON.length;i++){ LOGON[i].bf=""; scoreLogon(LOGON[i]); }
+  bfApply();
+  for(i=0;i<INDIC.length;i++){ if(INDIC[i].name==="Brute force / password spray"){ INDIC[i]=bfIndicator(); break; } }
+  buildTimeline();
+}
+/* logons.json / actions.json are cited evidence, so a failed write is a gap in the record, not a
+   detail to swallow - every other writer in this file reports its failures. */
 function writeAnalysisOutputs(){ try{
   writeUtf8(LASTOUTDIR+"\\logons.json", JSON.stringify(LOGON,null,1));
   writeUtf8(LASTOUTDIR+"\\actions.json", JSON.stringify(ACTIONS,null,1));
-}catch(e){} }
+}catch(e){ ANALYSIS_ERRS.push("outputs");
+  appendLog("analysis output write FAILED ("+(e&&e.message?e.message:e)+") - logons.json / actions.json were NOT written to "+LASTOUTDIR); } }
 
 /* ============================================================
    DROP-2: ransomware indicators + CVE exposure + case-note report
@@ -3243,7 +3402,9 @@ function ransomFileScan(){
   else if(ROOT){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); var dv=ROOT+"\\vmfs\\volumes";
     if(fso.FolderExists(dv)){ var budget={n:0}; (function walk(d,dep){ if(dep>8||budget.n>40000||hits.length>60) return; var fo; try{fo=fso.GetFolder(d);}catch(e){return;}
       try{ var e=new Enumerator(fo.Files); for(;!e.atEnd();e.moveNext()){ budget.n++; if(RANSOM_FILE.test(e.item().Name+"")) hits.push((e.item().Path+"")); } }catch(e1){}
-      try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()) walk(s.item().Path+"",dep+1); }catch(e2){} })(dv,0); } }catch(e){} }
+      try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()){ var sub=s.item();
+        if(isReparsePoint(sub)) continue;                 // never follow junctions/symlinks (loop / access-fault guard)
+        walk(sub.Path+"",dep+1); } }catch(e2){} })(dv,0); } }catch(e){} }
   return hits;
 }
 /* ---- ransomware RENAME detection, by SHAPE rather than signature -------------------------------
@@ -3273,9 +3434,9 @@ var RANSOM_NOTE_TEXT=/\.onion\b|tor browser|your (network|system|files|data)[^\n
    the shape logic so the logic is testable without a filesystem (the harness stubs this). */
 function dirFiles(relDir){
   var out=[], pre=String(relDir).replace(/\/+$/,"")+"/", i;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ var r=TOC[i].rel;
-      if(r.indexOf(pre)!==0) continue; if(r.substring(pre.length).indexOf("/")>=0) continue;
-      out.push({rel:r, name:baseName(r), size:TOC[i].size}); } return out; }
+  if(MODE==="toc"){ var kids=tocChildren(relDir);
+    for(i=0;i<kids.length;i++) out.push({rel:kids[i].rel, name:kids[i].name, size:kids[i].size});
+    return out; }
   if(!ROOT) return out;
   try{ var fso=new ActiveXObject("Scripting.FileSystemObject"), d=ROOT+"\\"+winRel(relDir);
     if(!fso.FolderExists(d)) return out;
@@ -3293,9 +3454,12 @@ function ransomScan(){
   for(d=0; d<dirs.length; d++){
     var fl=dirFiles(dirs[d]);
     for(i=0;i<fl.length;i++){ var f=fl[i], ext=encExtOf(f.name);
-      if(ext){ if(!byExt[ext]) byExt[ext]={ext:ext, n:0, samples:[], bases:{}, dirs:{}};
-        var g=byExt[ext]; g.n++; g.dirs[dirs[d]]=1;
-        g.bases[lc(f.name.substring(0, f.name.length-ext.length-1))]=1;
+      /* "#" prefix throughout: ext and the stripped basename are ATTACKER-CHOSEN strings (the whole
+         point of this scan is that the encryptor picks the suffix per victim). */
+      if(ext){ var ek="#"+ext;
+        if(!byExt[ek]) byExt[ek]={ext:ext, n:0, samples:[], bases:{}, dirs:{}};
+        var g=byExt[ek]; g.n++; g.dirs[dirs[d]]=1;
+        g.bases["#"+lc(f.name.substring(0, f.name.length-ext.length-1))]=1;
         if(g.samples.length<8) g.samples.push(f.name); }
       if(f.size<=131072 && /\.(txt|html|hta)$/i.test(f.name) && RANSOM_NOTE_NAME.test(f.name)){
         var t=readMember(f.rel); if(t && RANSOM_NOTE_TEXT.test(t)) RANSOM.notes.push(f.rel); }
@@ -3311,7 +3475,7 @@ function ransomScan(){
 function srcState(rels){
   var rel=resolveLog(rels); if(rel) return {ok:true, rel:rel};
   var base=baseName(rels[0]);
-  if(RANSOM && RANSOM.ext && RANSOM.ext.bases[lc(base)])
+  if(RANSOM && RANSOM.ext && RANSOM.ext.bases["#"+lc(base)])
     return {ok:false, enc:true, why:base+" was ENCRYPTED by the ransomware ("+base+"."+RANSOM.ext.ext+") - its contents cannot be recovered from this bundle, so this check is UNKNOWABLE, not clear"};
   return {ok:false, enc:false, why:base+" not captured in this bundle - not checkable"};
 }
@@ -3334,7 +3498,7 @@ function ransomLogInd(){
   var e=r.ext, dirs=[], k, lost=[], kept=[], i;
   for(k in e.dirs) if(e.dirs.hasOwnProperty(k)) dirs.push(k);
   var KEY=["shell.log","auth.log","vobd.log","esxupdate.log","hostd.log","vmkernel.log","rhttpproxy.log","vpxa.log","messages"];
-  for(i=0;i<KEY.length;i++){ if(!e.bases[lc(KEY[i])]) continue;
+  for(i=0;i<KEY.length;i++){ if(!e.bases["#"+lc(KEY[i])]) continue;
     (resolveLog(["var/run/log/"+KEY[i],"scratch/log/"+KEY[i],"var/log/"+KEY[i]]) ? kept : lost).push(KEY[i]); }
   return ind("Log directory encrypted (anti-forensics)","hit",
     nf(e.n)+" file(s) in "+dirs.join(", ")+" renamed to one unknown extension ."+e.ext+" (e.g. "+e.samples.slice(0,2).join(", ")+")"
@@ -3715,7 +3879,12 @@ function nvdStart(){
     if(settled) return; settled=true;
     if(timer){ try{ window.clearTimeout(timer); }catch(e){} }
     if(!got){ paint("err", failMsg||"NVD returned nothing"); return; }
-    NVD.state="ok"; NVD.when=isoNow(); NVD.n=CVES.length;   // what the panel shows, deduped across both queries
+    /* NVD.n is quoted as "N CVE(s) published for <product>" in the provenance paragraph, so it must be
+       what NVD ACTUALLY returned as applicable - the count of ids in NVD.seen, deduped across both
+       queries. It used to be CVES.length, which also counts cve.json-only rows the vendor never
+       returned, i.e. the report credited NVD with local hand-maintained data. */
+    var nSeen=0, sk; for(sk in NVD.seen){ if(NVD.seen.hasOwnProperty(sk)) nSeen++; }
+    NVD.state="ok"; NVD.when=isoNow(); NVD.n=nSeen;
     NVD.err = failMsg ? ("partial: "+failMsg) : "";
     appendLog("NVD: "+NVD.n+" applicable CVE(s) - "+NVD.added+" added, "+NVD.corroborated+" corroborated, "+NVD.conflicted+" CONFLICT(s)"+(failMsg?(" ["+failMsg+"]"):""));
     renderCves();
@@ -3812,7 +3981,7 @@ var RANSOM_KW=/(ransom|encrypt(ed|ion)?|decrypt|bitcoin|\bbtc\b|monero|\.onion|t
 function pfind(cat,name,verdict,detail,rel){ return {cat:cat,name:name,verdict:verdict,detail:detail,rel:rel||"",blob:lc(cat+" "+name+" "+verdict+" "+detail)}; }
 function customShellLines(txt){ var a=String(txt).split("\n"), out=[]; for(var i=0;i<a.length;i++){ var s=trimStr(a[i]); if(!s||s.charAt(0)==="#") continue; if(/^exit\s+0$/.test(s)) continue; if(/^#!/.test(s)) continue; out.push(s); } return out; }
 function listUnder(pre, re){ pre=pre.replace(/\/+$/,"")+"/"; var out=[];
-  if(MODE==="toc"){ for(var i=0;i<TOC.length;i++){ var rel=TOC[i].rel; if(rel.indexOf(pre)!==0) continue; if(rel.indexOf("/",pre.length)>=0) continue; var b=baseName(rel); if(!re||re.test(b)) out.push(b); } }
+  if(MODE==="toc"){ var kids=tocChildren(pre); for(var i=0;i<kids.length;i++){ var b=kids[i].name; if(!re||re.test(b)) out.push(b); } }
   else { var dir=ROOT+"\\"+winRel(pre); if(folderExists(dir)){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"), e=new Enumerator(fso.GetFolder(dir).Files); for(;!e.atEnd();e.moveNext()){ var nm=e.item().Name+""; if(!re||re.test(nm)) out.push(nm); } }catch(x){} } }
   return out;
 }
@@ -3960,12 +4129,22 @@ function rpmVerifyRow(){
 var SYSD_EXEC_SUS=/ExecStart\w*=.*(\bcurl\b|\bwget\b|\bnc\b|\bncat\b|bash\s+-|sh\s+-c|base64|python\s+-c|\/tmp\/|\/dev\/shm\/|\|\s*sh\b)/i;
 function systemdUnitRels(){
   var out=[], re=/^etc\/systemd\/system\/.+\.(service|timer|conf)$/i, i;
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ if(re.test(TOC[i].rel)) out.push(TOC[i].rel); } }   // any depth (drop-ins live in .service.d/)
-  else { var pre="etc/systemd/system", baseD=ROOT+"\\"+winRel(pre);
+  if(MODE==="toc"){ var r=tocRange("etc/systemd/system/"); for(i=r.lo;i<r.hi;i++){ if(re.test(r.a[i].rel)) out.push(r.a[i].rel); } }   // any depth (drop-ins live in .service.d/)
+  /* v1.17.5: this was the last UNBOUNDED recursive walker in the file - no depth cap, no node budget
+     and no reparse-point skip, i.e. exactly the shape v1.17.4 fixed in treeCount() (a junction loop
+     under an extracted tree is a stack-overflow / resource path that can close the app with nothing
+     catchable). It runs on every vCenter bundle in tree mode via buildPersistence, inside fleet's
+     synchronous per-host block. Now bounded and reparse-safe like every other walker. */
+  else { var pre="etc/systemd/system", baseD=ROOT+"\\"+winRel(pre), budget={n:0};
     try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
-      if(fso.FolderExists(baseD)){ (function walk(dir,relpre){ var fo; try{ fo=fso.GetFolder(dir); }catch(e){ return; }
-        var e2=new Enumerator(fo.Files); for(;!e2.atEnd();e2.moveNext()){ var nm=e2.item().Name+""; if(/\.(service|timer|conf)$/i.test(nm)) out.push(relpre+"/"+nm); }
-        var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()){ walk(s.item().Path+"", relpre+"/"+(s.item().Name+"")); } })(baseD, pre); }
+      if(fso.FolderExists(baseD)){ (function walk(dir,relpre,depth){
+        if(depth>WALK_MAXDEPTH || budget.n>WALK_BUDGET) return;
+        var fo; try{ fo=fso.GetFolder(dir); }catch(e){ return; }
+        try{ var e2=new Enumerator(fo.Files); for(;!e2.atEnd();e2.moveNext()){ budget.n++; var nm=e2.item().Name+""; if(/\.(service|timer|conf)$/i.test(nm)) out.push(relpre+"/"+nm); } }catch(e3){}
+        try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()){ var sub=s.item();
+          if(isReparsePoint(sub)) continue; if(budget.n>WALK_BUDGET) break;
+          walk(sub.Path+"", relpre+"/"+(sub.Name+""), depth+1); } }catch(e4){}
+      })(baseD, pre, 0); }
     }catch(x){} }
   return out;
 }
@@ -4445,7 +4624,8 @@ function findVmxRels(){ var out=[];
   else { var fso=new ActiveXObject("Scripting.FileSystemObject"), budget={n:0};
     (function walk(dir,depth){ if(depth>9||budget.n>30000) return; var fo; try{ fo=fso.GetFolder(dir); }catch(e){ return; }
       try{ var e=new Enumerator(fo.Files); for(;!e.atEnd();e.moveNext()){ budget.n++; var it=e.item(), nm=it.Name+""; if(/\.vmx$/i.test(nm)&&!/\.vmxf$/i.test(nm)) out.push((it.Path+"").substring(ROOT.length+1).replace(/\\/g,"/")); } }catch(e1){}
-      try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()) walk(s.item().Path+"",depth+1); }catch(e2){}
+      try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()){ var sub=s.item();
+        if(isReparsePoint(sub)) continue; walk(sub.Path+"",depth+1); } }catch(e2){}
     })(ROOT,0); }
   return out; }
 /* read one archive member via stdout (tar -xO) into a SHORT temp file - immune to Windows MAX_PATH
@@ -4599,7 +4779,8 @@ function scanEsxiEncFolders(vmxRels){
   else { var fso=new ActiveXObject("Scripting.FileSystemObject"), budget={n:0};
     (function walk(dir,depth){ if(depth>9||budget.n>40000) return; var fo; try{ fo=fso.GetFolder(dir); }catch(e){ return; }
       try{ var e2=new Enumerator(fo.Files); for(;!e2.atEnd();e2.moveNext()){ budget.n++; var it=e2.item(); addFile((it.Path+"").substring(ROOT.length+1).replace(/\\/g,"/")); } }catch(e3){}
-      try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()) walk(s.item().Path+"",depth+1); }catch(e4){}
+      try{ var s=new Enumerator(fo.SubFolders); for(;!s.atEnd();s.moveNext()){ var sub=s.item();
+        if(isReparsePoint(sub)) continue; walk(sub.Path+"",depth+1); } }catch(e4){}
     })(ROOT+"\\vmfs",0); }
   var invPaths=vmInventoryEntries(), invByDir={};
   for(i=0;i<invPaths.length;i++){ var ip=invPaths[i]; invByDir[lc(dirOfRel(ip))]=baseName(ip); }
@@ -4675,7 +4856,7 @@ function drmDumpSets(){
     var dom=m[1]; if(lc(dom)==="fakepod") return; var n=parseInt(m[2],10);
     var d=dirs[dom]; if(!d){ d={hi:-1,lo:1e15,hiRel:"",loRel:""}; dirs[dom]=d; }
     if(n>d.hi){ d.hi=n; d.hiRel=rel; } if(n<d.lo){ d.lo=n; d.loRel=rel; } }
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++) track(TOC[i].rel); }
+  if(MODE==="toc"){ var r=tocRange("var/log/vmware/vpxd/drmdump/"); for(i=r.lo;i<r.hi;i++) track(r.a[i].rel); }
   else { var base=ROOT+"\\"+winRel("var/log/vmware/vpxd/drmdump");
     try{ var fso=new ActiveXObject("Scripting.FileSystemObject"), s=new Enumerator(fso.GetFolder(base).SubFolders);
       for(;!s.atEnd();s.moveNext()){ var dom2=s.item().Name+"";
@@ -5191,8 +5372,8 @@ function previewVmx(rel){ var txt=catMember(rel); if(!txt){ setStatus("Could not
 var VMLOG_METH=/^(Bootstrap\.(PowerOn|PowerOff|Reset|Suspend|Migrate)|Snapshot\.(Take|Delete|Consolidate|Revert)|Migrate\.\w+|GuestOps\.(Start\w*|Initiate\w*|Create\w*|MakeDirectory\w*|Move\w*|Delete\w*|Run\w*|Change\w*))$/;
 function vmLogRels(cfgRel){
   var dir=cfgRel.replace(/\/[^\/]*$/,""), out=[], i;
-  var re=new RegExp("^"+dir.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"/vmware(-\\d+)?\\.log$","i");
-  if(MODE==="toc"){ for(i=0;i<TOC.length;i++){ if(re.test(TOC[i].rel)) out.push(TOC[i].rel); } }
+  var bre=/^vmware(-\d+)?\.log$/i;
+  if(MODE==="toc"){ var kids=tocChildren(dir); for(i=0;i<kids.length;i++){ if(bre.test(kids[i].name)) out.push(kids[i].rel); } }
   else { var names=listUnder(dir+"/", /^vmware(-\d+)?\.log$/i); for(i=0;i<names.length;i++) out.push(dir+"/"+names[i]); }
   out.sort(function(a,b){ var na=(a.match(/vmware-(\d+)/)||[])[1], nb=(b.match(/vmware-(\d+)/)||[])[1];
     if(na==null&&nb!=null) return -1; if(nb==null&&na!=null) return 1; return (parseInt(nb,10)||0)-(parseInt(na,10)||0); });
@@ -5496,7 +5677,7 @@ function buildReportHtml(){
       h.push('<tr'+(sc2.status==="fail"?' class="rf"':(sc2.status==="warn"?' class="rw"':''))+'><td>'+rEsc(sc2.grp)+'</td><td>'+rEsc(sc2.name)+'</td>'
         +'<td class="'+scls+'">'+rEsc(sc2.status==="na"?"n/a":sc2.status.toUpperCase())+'</td><td>'+rEsc(sc2.detail)+'</td></tr>'); }
     h.push('</table>');
-    if(VIBS_NOTABLE.length){ h.push('<h3>Third-party &amp; non-standard VIBs ('+VIBS_NOTABLE.length+' of '+VIBS.length+' installed packages)</h3>');
+    if(BTYPE==="esxi" && VIBS_NOTABLE.length){ h.push('<h3>Third-party &amp; non-standard VIBs ('+VIBS_NOTABLE.length+' of '+VIBS.length+' installed packages)</h3>');
       h.push('<p class="muted">VMwareCertified VMware VIBs are omitted. Confirm any unsigned / unrecognized-vendor / recently-added entry.</p>');
       h.push('<table><tr><th>VIB</th><th>Version</th><th>Vendor</th><th>Acceptance</th><th>Install date</th></tr>');
       for(i=0;i<VIBS_NOTABLE.length;i++){ var vb=VIBS_NOTABLE[i]; var vbc=vb.trust===0?"hit":((vb.trust===1||!vb.known)?"warn":"");
@@ -5835,7 +6016,7 @@ function buildSecurityHtml(){
       h.push('<tr><td>'+rEsc(s2.grp)+'</td><td>'+rEsc(s2.name)+'</td><td class="'+s2c+'">'+rEsc(s2.status==="na"?"n/a":s2.status.toUpperCase())+'</td><td>'+rEsc(s2.detail)+'</td></tr>'); }
     h.push('</table>'); }
   // VIBs
-  if(VIBS_NOTABLE.length){ h.push('<h2>Third-party &amp; non-standard VIBs ('+VIBS_NOTABLE.length+' of '+VIBS.length+' installed packages)</h2>');
+  if(BTYPE==="esxi" && VIBS_NOTABLE.length){ h.push('<h2>Third-party &amp; non-standard VIBs ('+VIBS_NOTABLE.length+' of '+VIBS.length+' installed packages)</h2>');
     h.push('<table><tr><th>VIB</th><th>Version</th><th>Vendor</th><th>Acceptance</th><th>Install date</th></tr>');
     for(i=0;i<VIBS_NOTABLE.length;i++){ var vb=VIBS_NOTABLE[i]; var vc2=vb.trust===0?"hit":((vb.trust===1||!vb.known)?"warn":"");
       h.push('<tr><td class="mono">'+rEsc(vb.name)+'</td><td class="mono">'+rEsc(vb.ver)+'</td><td class="mono'+(vc2?" "+vc2:"")+'">'+rEsc(vb.vendor)+(vb.known||vb.vmware?"":" (unknown)")+'</td><td class="'+vc2+'">'+rEsc(vb.acc)+'</td><td class="mono">'+rEsc(vb.date)+'</td></tr>'); }
@@ -5890,7 +6071,7 @@ function loadSnapshot(outdir, sig){
     var snap=o.snap; snap.reused=true; return snap;
   }catch(e){ return null; } }
 function fleetBase(){ var b=htaFolder(); if(!b){ try{ b=new ActiveXObject("Scripting.FileSystemObject").GetSpecialFolder(2)+""; }catch(e){ return ""; } } return b+"\\_Processed\\_fleet"; }
-var SKIP_DIRS={"_processed":1,"_extracted":1,"_view":1,"tools":1,"_fleet":1,"_nodecfg":1};
+var SKIP_DIRS={"#_processed":1,"#_extracted":1,"#_view":1,"#tools":1,"#_fleet":1,"#_nodecfg":1};   // "#"-prefixed: keys are folder names off disk
 /* reparse point (junction / symlink) - descending into these is how a fleet walk on a fresh VM loops
    or faults: profile / ProgramData junctions self-reference or deny access. FILE_ATTRIBUTE_REPARSE_POINT
    = 0x400. Guarded because .Attributes can throw on some special folders. */
@@ -5900,7 +6081,7 @@ function discoverBundles(root){
   var cands=[], seen={}, visited={n:0, capped:false}, fso=new ActiveXObject("Scripting.FileSystemObject");
   function push(p){ var k=lc(p); if(!seen[k]){ seen[k]=1; cands.push(p); } }
   function walk(dir, depth){
-    if(depth>6) return; if(SKIP_DIRS[lc(baseName(dir))]) return;
+    if(depth>6) return; if(SKIP_DIRS["#"+lc(baseName(dir))]) return;
     if(visited.n>DISCOVER_MAX){ visited.capped=true; return; }
     visited.n++;
     var fo; try{ fo=fso.GetFolder(dir); }catch(e){ return; }
@@ -5940,7 +6121,12 @@ function readTocSync(archive){
   var ok=false; try{ if(fso.FileExists(raw)){ parseTocRaw(readUtf8(raw)); ok=TOC.length>0; fso.DeleteFile(raw); } }catch(e){}
   if(ok) cacheToc(archive); return ok;
 }
-function resetHostGlobals(){ TOC=[]; TOCMAP={}; PREFIX=""; BTYPE=""; NODE={}; INVENTORY=[]; LOGON=[]; BF=null; RANSOM=null; MAINT=[]; VMEV=[]; VMEV_SRC=""; VPXD_HUMANS=[]; VM_MOREF_NAME={}; ACTIONS=[]; TIMELINE=[]; IOCHITS=[]; INDIC=[]; CVES=[]; PERSIST=[]; SPEC=[]; VMS=[]; SECPOST=[]; VIBS=[]; VIBS_NOTABLE=[]; VOBD_STATS=null; ESXUP_EVENTS=[]; NETINFO=null; LOG_TRUNC=[]; VPXD_LINES=null; VPXD_SRCNOTE=""; USERSV=[]; PAM_FINDS=null; logCacheClear(); }
+/* THE single per-bundle reset. analyze() used to keep its own shorter copy of this list, and the two
+   drifted: VIBS / VIBS_NOTABLE were missing from analyze()'s copy, so opening an ESXi bundle and then a
+   vCenter one left the ESXi host's VIB table rendered under the vCenter's name in the Security tab AND
+   in both exported HTML reports (the three render sites gate on VIBS_NOTABLE.length, not on BTYPE).
+   Both entry points now call THIS function - a new global belongs here and nowhere else. */
+function resetHostGlobals(){ TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFIX=""; BTYPE=""; NODE={}; INVENTORY=[]; LOGON=[]; SESSIONS=[]; BF=null; RANSOM=null; MAINT=[]; MAINT_TOTAL=0; VMEV=[]; VMEV_SRC=""; VMEV_TOTAL=0; VPXD_HUMANS=[]; VM_MOREF_NAME={}; ACTIONS=[]; TIMELINE=[]; IOCHITS=[]; IOC_SWEEPCAP=""; INDIC=[]; CVES=[]; PERSIST=[]; SPEC=[]; VMS=[]; VCSA_VM_META=null; SECPOST=[]; VIBS=[]; VIBS_NOTABLE=[]; VOBD_STATS=null; ESXUP_EVENTS=[]; NETINFO=null; LOG_TRUNC=[]; VPXD_LINES=null; VPXD_SRCNOTE=""; USERSV=[]; PAM_FINDS=null; ANALYSIS_ERRS=[]; logCacheClear(); }
 function processHostSync(path){
   var tp="h"+FLEET_I+" "+baseName(path);
   fleetTrace(tp+" | ENTER processHostSync");
@@ -5980,7 +6166,7 @@ function processHostSync(path){
   fleetTrace(tp+" | DONE (snapshot saved)");
   return snap;
 }
-function distinct(arr){ var m={},o=[]; for(var i=0;i<arr.length;i++){ var k=lc(arr[i]); if(k&&!m[k]){ m[k]=1; o.push(arr[i]); } } return o; }
+function distinct(arr){ var m={},o=[]; for(var i=0;i<arr.length;i++){ var k=lc(arr[i]); if(k&&!m["#"+k]){ m["#"+k]=1; o.push(arr[i]); } } return o; }
 /* vSAN sub-cluster identity (groups hosts into clusters; also gives member hostnames) */
 function extractCluster(){
   if(BTYPE!=="esxi") return {uuid:"", members:[]};
@@ -6088,16 +6274,26 @@ function triageFleet(){
   $("typepill").className="pill"; $("typepill").innerHTML="fleet mode";
   window.setTimeout(fleetStep, 30);
 }
+/* One host per tick. EVERYTHING after the fleetDone() check is inside try/finally: only
+   processHostSync used to be guarded, so a throw from renderRoster() or the dedup bookkeeping escaped
+   into window.onerror - which resets BUSY and re-enables the buttons but never schedules the next
+   tick. The run then stopped part-way through the fleet looking finished. The next tick is now
+   scheduled in the finally, so no single host can end the run. */
 function fleetStep(){
   if(FLEET_I>=FLEET_CANDS.length){ fleetDone(); return; }
   var path=FLEET_CANDS[FLEET_I]; FLEET_I++;
-  setStatus("Fleet: processing "+FLEET_I+"/"+FLEET_CANDS.length+" - "+baseName(path)+"…","muted");
-  var rec=null; try{ rec=processHostSync(path); }catch(e){ appendLog("  host "+baseName(path)+" FAILED: "+e.message); }
-  if(rec){ var k=lc(rec.host); if(!FLEET_HOSTS[k]){ FLEET_HOSTS[k]=1; FLEET.push(rec); appendLog("  + "+rec.host+" ("+rec.type+") risk="+rec.risk); }
-    else appendLog("  (dup host "+rec.host+" - skipped)"); }
-  else appendLog("  - "+baseName(path)+": not a bundle / wrapper - skipped");
-  renderRoster();
-  window.setTimeout(fleetStep, 20);
+  try{
+    setStatus("Fleet: processing "+FLEET_I+"/"+FLEET_CANDS.length+" - "+baseName(path)+"…","muted");
+    var rec=null; try{ rec=processHostSync(path); }catch(e){ appendLog("  host "+baseName(path)+" FAILED: "+(e&&e.message?e.message:e)); }
+    if(rec){ var k="#"+lc(rec.host); if(!FLEET_HOSTS[k]){ FLEET_HOSTS[k]=1; FLEET.push(rec); appendLog("  + "+rec.host+" ("+rec.type+") risk="+rec.risk); }
+      else appendLog("  (dup host "+rec.host+" - skipped)"); }
+    else appendLog("  - "+baseName(path)+": not a bundle / wrapper - skipped");
+    renderRoster();
+  }catch(eStep){
+    try{ appendLog("  fleet step "+FLEET_I+" ("+baseName(path)+") raised: "+(eStep&&eStep.message?eStep.message:eStep)+" - continuing with the next bundle."); }catch(eL){}
+  }finally{
+    window.setTimeout(fleetStep, 20);
+  }
 }
 function shareOp(a,b){ if(!a||!b) return ""; for(var k in a){ if(a.hasOwnProperty(k) && b[k]) return k; } return ""; }
 function assignClusters(){
@@ -6606,7 +6802,10 @@ function renderSecurity(){
       var st=secTip(r);
       h+='<div class="ind"'+(st?(' title="'+esc(st)+'"'):'')+'><span class="dot '+secDotCls(r.status)+'"></span><span class="nm">'+esc(r.name)+'</span><span class="st '+secStCls(r.status)+'">'+esc(r.status==="na"?"n/a":r.status.toUpperCase())+'</span><span class="dt">'+esc(r.detail)+'</span></div>'; }
     h+='</div>'; }
-  if(VIBS_NOTABLE.length){
+  /* VIBs are an ESXi concept (localcli software vib list); a vc-support bundle has none. The BTYPE gate
+     is belt-and-braces against the state leak fixed in resetHostGlobals: a stale ESXi VIB list must
+     never be able to render under a vCenter host's name. Same gate at both report writers. */
+  if(BTYPE==="esxi" && VIBS_NOTABLE.length){
     h+='<div class="panel" style="margin-bottom:10px"><h4>Third-party &amp; non-standard VIBs <span class="sub" style="font-weight:400;text-transform:none;color:#8b949e">- '+VIBS_NOTABLE.length+' of '+VIBS.length+' installed packages (VMwareCertified VMware VIBs omitted). Confirm any unsigned / unrecognized-vendor / recently-added entry.</span></h4>';
     h+='<div class="scroll" style="max-height:34vh"><table><thead><tr><th title="Installed VMware Installation Bundle (package) on the host.">VIB</th><th title="Package version - part of the patch-state picture.">Version</th><th title="Who signed it. An unrecognized vendor on an ESXi host warrants explanation.">Vendor</th><th title="Signing level: VMwareCertified / VMwareAccepted / PartnerSupported / CommunitySupported. CommunitySupported means unsigned-by-VMware code - a known ransomware persistence route.">Acceptance</th><th title="When the VIB was installed. Anything installed after the base image date is called out - that is how a rogue VIB shows up.">Install date</th></tr></thead><tbody>';
     for(var v=0;v<VIBS_NOTABLE.length;v++){ var vb=VIBS_NOTABLE[v];
@@ -6812,7 +7011,7 @@ function emptyWhy(kind){
   var extra="";
   if(RANSOM && RANSOM.ext){
     var lost=[], KEY=["shell.log","vobd.log","esxupdate.log","auth.log"], i;
-    for(i=0;i<KEY.length;i++) if(RANSOM.ext.bases[lc(KEY[i])] && !resolveLog(["var/run/log/"+KEY[i],"scratch/log/"+KEY[i],"var/log/"+KEY[i]])) lost.push(KEY[i]);
+    for(i=0;i<KEY.length;i++) if(RANSOM.ext.bases["#"+lc(KEY[i])] && !resolveLog(["var/run/log/"+KEY[i],"scratch/log/"+KEY[i],"var/log/"+KEY[i]])) lost.push(KEY[i]);
     if(lost.length) extra='<div style="color:#ff8b8b;margin-top:8px"><b>This is not "nothing happened".</b> '+esc(lost.join(", "))
       +' exist in this bundle ONLY as ciphertext - renamed to .'+esc(RANSOM.ext.ext)+' by ransomware ('+nf(RANSOM.ext.n)
       +' file(s) encrypted). The command history this tab is built from was destroyed by the attacker. See the Security tab.</div>';
@@ -6928,7 +7127,9 @@ function wireFreeze(container){ if(!container) return; var divs=container.getEle
   for(i=0;i<divs.length;i++){ var d=divs[i]; if(/(^|\s)scroll(\s|$)/.test(d.className+"")){ d.onscroll=(function(sc){ return function(){ freezeThs(sc); }; })(d); freezeThs(d); } } }
 /* populate a filter <select> with (all)+distinct values, preserving the current selection */
 function fillFilterSel(id, values, cur){ var el=$(id); if(!el) return; var seen={}, vs=[], i;
-  for(i=0;i<values.length;i++){ var v=values[i]; if(v==null||v==="") continue; var k=lc(v); if(!seen[k]){ seen[k]=1; vs.push(String(v)); } }
+  /* "#" prefix - values are log-derived (actors, kinds, guest-OS strings); an unprefixed "constructor"
+     or "toString" reads truthy off Object.prototype and would silently drop that option. */
+  for(i=0;i<values.length;i++){ var v=values[i]; if(v==null||v==="") continue; var k="#"+lc(v); if(!seen[k]){ seen[k]=1; vs.push(String(v)); } }
   vs.sort(function(a,b){ a=lc(a); b=lc(b); return a<b?-1:(a>b?1:0); });
   var found=false, h='<option value="">(all)</option>';
   for(i=0;i<vs.length;i++){ var sel=(vs[i]===cur); if(sel) found=true; h+='<option value="'+esc(vs[i])+'"'+(sel?' selected':'')+'>'+esc(vs[i])+'</option>'; }
@@ -7201,8 +7402,22 @@ function init(){
   $("hostName").onkeyup=function(){ HOST_TOUCHED=true; syncOutDir(); };
   $("outDir").onkeyup=function(){ OUT_TOUCHED=true; };
 
+  /* A+ / A- text scaling. Ported from vSphere-VM-Recovery: <header> and the two modal cards live
+     OUTSIDE #content, so zooming #content alone left the app header row - and the Help / IOC dialogs -
+     at a fixed size while everything else grew or shrank. Each block is zoomed and then widened by
+     1/zoom, because a zoom<1 shrinks a 100%-wide block to less than the viewport and leaves a blank
+     gutter down the right. For the modals the CARD is scaled and not the fixed overlay, so the dim
+     backdrop still covers the whole viewport at any zoom level. */
   var zoom=0.9, zContent=$("content");
-  function applyZoom(){ zContent.style.zoom=zoom; zContent.style.width=(100/zoom)+"%"; var p=Math.round(zoom*100)+"%"; $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
+  function zoomBlock(el){ if(!el) return; el.style.zoom=zoom; el.style.width=(100/zoom)+"%"; el.style.boxSizing="border-box"; }
+  var ZOOM_MODALS=["helpModal","iocModal"];
+  function applyZoom(){
+    zoomBlock(zContent);
+    var hs=document.getElementsByTagName("header"); if(hs.length) zoomBlock(hs[0]);
+    for(var mi=0;mi<ZOOM_MODALS.length;mi++){ var m=$(ZOOM_MODALS[mi]); if(!m) continue;
+      var cards=m.getElementsByTagName("div");
+      for(var ci=0;ci<cards.length;ci++){ if(/(^|\s)mcard(\s|$)/.test(cards[ci].className+"")){ cards[ci].style.zoom=zoom; break; } } }
+    var p=Math.round(zoom*100)+"%"; $("fup").title="Larger text ("+p+")"; $("fdown").title="Smaller text ("+p+")"; }
   applyZoom();
   $("fup").onclick=function(){ zoom=Math.min(zoom+0.15,2.5); applyZoom(); };
   $("fdown").onclick=function(){ zoom=Math.max(zoom-0.15,0.6); applyZoom(); };
@@ -7271,8 +7486,10 @@ function init(){
   $("userSel").onchange=function(){ USER_SEL=this.value; render(); };
   $("actKind").onchange=function(){ ACT_KIND=this.value; render(); };
   $("timeKind").onchange=function(){ TIME_KIND=this.value; render(); };
-  $("dfrom").onchange=function(){ DFROM=dayNum(this.value); render(); };
-  $("dto").onchange=function(){ DTO=dayNum(this.value); render(); };
+  /* rescoreForWindow() first: the brute-force detector reads the case window, so its verdict and the
+     scores it contributes must be rebuilt before anything repaints. */
+  $("dfrom").onchange=function(){ DFROM=dayNum(this.value); rescoreForWindow(); render(); };
+  $("dto").onchange=function(){ DTO=dayNum(this.value); rescoreForWindow(); render(); };
   $("tclear").onclick=function(){ $("tq").value=""; TQUERY=""; SCOREF={c5:true,c3:true,c1:true,c0:true};
     ACT_ACTOR=""; ACT_KIND=""; TIME_KIND=""; USER_SEL="";
     $("scf5").checked=$("scf3").checked=$("scf1").checked=$("scf0").checked=true; render(); };
