@@ -475,7 +475,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.9";
+var APP_VERSION = "1.17.10";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -2232,31 +2232,44 @@ var VPXD_KEEP=4, VPXD_KEEP_DEEP=12, VPXD_OLDCAP=16*1024*1024;
    read them: measured byte offsets show every name lands in the first 0.6 MB, and a 8 MB head
    captures 114 of the 116. So - bounded HEAD read, regex for the name pattern only, text dropped
    immediately, and it stops as soon as nothing is still unresolved. */
-var VPXD_NAME_FILES=3, VPXD_NAME_HEAD=8*1024*1024, VPXD_NAMES_NOTE="";
-function vpxdHarvestNames(map, needed){
+var VPXD_NAME_FILES=6, VPXD_NAME_HEAD=8*1024*1024, VPXD_NAMES_NOTE="";
+/* `want` is the SET of MoRefs still unnamed (keys), not a count. v1.17.9 passed a count and
+   decremented it for EVERY newly-learned name, including the ~100 that were nothing to do with the
+   unresolved rows - so it hit zero inside the first file and stopped, leaving the genuinely wanted
+   ones unresolved. Measured consequence: unresolved rows fell from ~17 to 5, and those 5 were all
+   HIGH MoRefs (recently created VMs) whose names live in MIDDLE rotations - a VM created last week
+   cannot appear in the oldest log, and had not been touched inside the analysed window either.
+   So the scan order is now BOTH ENDS INWARD: oldest first (long-lived VMs, named by vpxd's
+   startup inventory enumeration), then newest-unread (recent VMs), alternating. */
+function vpxdHarvestNames(map, want){
   VPXD_NAMES_NOTE="";
-  var all=vpxdAllRels(), sel=vpxdSelectedRels(), i, m, found=0, scanned=0;
-  if(all.length<=sel.length) return 0;                       // nothing outside the analysed window
+  var all=vpxdAllRels(), sel=vpxdSelectedRels(), i, m, found=0, scanned=0, k;
+  var need=0; for(k in want){ if(want.hasOwnProperty(k)) need++; }
+  if(!need || all.length<=sel.length) return 0;              // nothing wanted, or nothing outside the window
   var inSel={}; for(i=0;i<sel.length;i++) inSel["#"+sel[i]]=1;
   var extra=[]; for(i=0;i<all.length;i++){ if(!inSel["#"+all[i]]) extra.push(all[i]); }
   if(!extra.length) return 0;
-  for(i=0;i<extra.length && i<VPXD_NAME_FILES; i++){
-    if(needed<=0) break;
-    var rel=extra[i];                                        // vpxdAllRels is chronological: oldest first
-    trace("    vpxd name harvest: "+baseName(rel));
+  /* interleave oldest / newest-unread so one pass covers both long-lived and recent VMs */
+  var order=[], lo=0, hi=extra.length-1;
+  while(lo<=hi){ order.push(extra[lo++]); if(lo<=hi) order.push(extra[hi--]); }
+  for(i=0;i<order.length && i<VPXD_NAME_FILES && need>0; i++){
+    var rel=order[i];
+    trace("    vpxd name harvest: "+baseName(rel)+" ("+need+" still wanted)");
     var src=ensureExtracted(rel); if(!src) continue;
     if(/\.(gz|zst)$/i.test(src)){ var v=viewablePath(src); if(!v) continue; src=v; }
     var txt=readCappedText(src, VPXD_NAME_HEAD); scanned++;
     if(!txt) continue;
     VM_NAME_RE.lastIndex=0;
     while((m=VM_NAME_RE.exec(txt))){
-      var k=m[1];                                          // raw MoRef, matching vmName (always "vm-<digits>")
-      if(map[k]==null){ map[k]=trimStr(m[2]); found++; needed--; }
+      var mo=m[1];                                           // raw MoRef, matching vmName ("vm-<digits>")
+      if(map[mo]==null){ map[mo]=trimStr(m[2]); found++; }
+      if(want[mo]){ delete want[mo]; need--; }               // only a WANTED name counts down
     }
     txt=null;                                                // drop the head before the next file
     gcNow();
   }
-  if(found){ VPXD_NAMES_NOTE=found+" VM name(s) recovered from "+scanned+" older vpxd rotation(s) outside the analysed window";
+  if(found){ VPXD_NAMES_NOTE=found+" VM name(s) recovered from "+scanned+" vpxd rotation(s) outside the analysed window"
+      +(need?("; "+need+" MoRef(s) still unnamed - not present in the rotations scanned"):"");
     appendLog("  "+VPXD_NAMES_NOTE); }
   return found;
 }
@@ -3518,13 +3531,17 @@ function runAnalysis(){
       astep("users", parseUsersV); astep("persist-accounts", buildPersistAccounts);   // after sessions: rows carry the envoy-joined IPs
       astep("security", buildSecurity);
       astep("vms", parseVms); astep("vmevents", parseVmEvents);
-      /* parseVmEvents is the LAST vpxd consumer in single-Analyze (collectOpTasks /
-         collectManagedHosts are fleet-only, and processHostSync frees it after snapshotHost).
-         With "incl. rotated logs" this holds up to 12 files - ~200 MB of text, ~450 MB as JS
-         strings - and was carried through spec, every render AND the report. Measured on the
-         Azure VM: peak 1,039 MB against a ~1.2 GB 32-bit ceiling. */
-      VPXD_LINES=null; gcNow(); trace("vpxd line set released");
       astep("spec", buildSpec);   // after parseVms: the vCenter cluster-node table reads VCSA_VM_META (v1.16.0)
+      /* RELEASE POINT - and it must stay HERE, after spec.
+         v1.17.9 put it before spec, having grepped only for direct vpxdLines() calls and concluded
+         parseVmEvents was the last consumer. It is not: buildSpec -> buildSpecVcsa ->
+         buildManagedNodesSpec -> collectManagedHosts() -> vpxdLines(). Releasing first therefore made
+         vpxdLines() REBUILD the whole merged set (1.38 M lines on the reference vCenter with rotated
+         logs on), which cost ~145 s and pushed the peak from 1,039 MB to 1,304 MB - a memory fix that
+         made memory worse. Check the CALL GRAPH, not just direct callers, before moving this.
+         Fleet mode frees it in processHostSync after snapshotHost, whose collectOpTasks /
+         collectManagedHosts are its last consumers there. */
+      VPXD_LINES=null; gcNow(); trace("vpxd line set released");
       /* ---- everything below is the RENDER TAIL. It sits OUTSIDE safeStep, so a fault here never
          reaches ANALYSIS_ERRS / runinfo's parserFailures - which is exactly why a "crashed after
          processing" report was undiagnosable: every artifact said the run succeeded. Traced step by
@@ -5183,9 +5200,9 @@ function parseVcsaVms(){
   for(i=0;i<(drm.earliest||[]).length;i++){ var r0=parseDrmPlacement(drm.earliest[i]); dOld=dOld||r0.date; for(var k0 in r0.place) if(r0.place.hasOwnProperty(k0)) placeOld[k0]=r0.place[k0]; }
   /* v1.17.9: recover names the analysed window never mentioned. Placed BEFORE the vSAN-health
      hash crack so the recovered names also enrich its dictionary (line ~dict.push(vmName[dk])). */
-  var unnamedN=0, un1;
-  for(un1 in placeNew){ if(placeNew.hasOwnProperty(un1) && !vmName[un1]) unnamedN++; }
-  if(unnamedN){ trace("    parseVcsaVms: "+unnamedN+" placed VM(s) unnamed - harvesting older rotations"); vpxdHarvestNames(vmName, unnamedN); }
+  var wantNames={}, unnamedN=0, un1;
+  for(un1 in placeNew){ if(placeNew.hasOwnProperty(un1) && !vmName[un1]){ wantNames[un1]=1; unnamedN++; } }
+  if(unnamedN){ trace("    parseVcsaVms: "+unnamedN+" placed VM(s) unnamed - harvesting rotations outside the window"); vpxdHarvestNames(vmName, wantNames); }
   var hb=vsanHealthBaseline(), baseNames={};
   if(hb && (function(){ for(var x in hb.vms){ if(hb.vms.hasOwnProperty(x)) return true; } return false; })()){
     var dict=[], dk;
