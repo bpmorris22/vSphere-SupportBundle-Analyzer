@@ -35,7 +35,7 @@
      README Command line / bundle-name prefix (esx-* vs vc-*).
    * Bundles are 4-7 GB. The inventory board is built from the archive TABLE OF CONTENTS
      (bsdtar -tvf: "<mode> <own> <size> <YYYY-MM-DD> <HH:MM> <path>") so it paints WITHOUT full
-     extraction; individual files are extracted on demand when Open file / Open folder is clicked.
+     extraction; individual files are extracted on demand when Open file / Open Folder is clicked.
    * Windows bsdtar (tar.exe) handles tar+gzip+PaxHeader but NOT zstd. zstd.exe is probed
      (tools\ -> PATH) and, if missing, offered as a prompted download from the official
      facebook/zstd GitHub release. .zst logs are still listed if zstd is absent.
@@ -178,6 +178,8 @@
   <span class="pill" id="zstdpill">zstd: &hellip;</span>
   <span class="pill" id="typepill">no bundle loaded</span>
   <span style="float:right">
+    <span class="pill" id="procTimer" title="Scan time. Starts when Analyze Bundle or Scan Fleet Folder begins and stops when the run finishes, so you can see how long a bundle actually took. The app is single-threaded, so it can pause during a heavy step (a multi-GB archive index, a rotation decompress) and then jump forward - that is the step blocking, not a stall." style="min-width:150px;text-align:center;display:inline-block">Idle</span>
+    <button class="btn" id="logToggle" title="Show or hide the run log - the per-file parse detail, truncation notices and any stage failures.">Show/Hide Log</button>
     <button class="btn" id="instrBtn" title="Download &amp; open the latest Field Manual from GitHub">Instructions</button>
     <button class="btn" id="helpBtn" title="Help, about &amp; GitHub link">Help</button>
     <button class="btn primary hide" id="selfUpd" title="A newer version is available on GitHub">Update</button>
@@ -199,23 +201,21 @@
     <input class="txt wide" id="inPath" value="">
     <input type="file" id="inPick" style="display:none">
     <button class="btn" id="browseBtn">Browse&hellip;</button>
-    <button class="btn" id="folderBtn" title="Pick an already-extracted bundle folder instead of an archive.">Pick folder&hellip;</button>
+    <button class="btn" id="folderBtn" title="Pick an already-extracted bundle folder instead of an archive.">Pick Folder&hellip;</button>
     <label class="fld" title="Required. Guessed from the bundle name - overwrite if wrong. Names the output folder _Processed\&lt;host&gt;\vSphere next to this app.">Target hostname (required) - names the output folder _Processed\&lt;host&gt;\vSphere next to this app</label>
     <input class="txt" id="hostName" value="" style="width:300px" placeholder="e.g. esxi01 or vcsa01">
     <label class="fld">Output directory (TOC cache, extracted files, runinfo land here)</label>
     <input class="txt wide" id="outDir" value="">
-    <button class="btn" id="openDirBtn">Open folder</button>
+    <button class="btn" id="openDirBtn">Open Folder</button>
     <div style="margin-top:10px">
-      <button class="btn orange" id="iocBtn" title="Create or edit the shared IOC list (IOC.csv &rarr; IOC.txt) that the IOC sweep matches against. Read by every wrapper in the family at launch.">Create IOC list</button>
+      <button class="btn orange" id="iocBtn" title="Create or edit the shared IOC list (IOC.csv &rarr; IOC.txt) that the IOC sweep matches against. Read by every wrapper in the family at launch.">Create IOC List</button>
       <span class="sep"></span>
-      <button class="btn primary" id="procBtn" title="Read the bundle table of contents, detect the type, and build the file inventory + node-config summary.">Analyze bundle</button>
+      <button class="btn primary" id="procBtn" title="Read the bundle table of contents, detect the type, and build the file inventory + node-config summary.">Analyze Bundle</button>
       <span class="sep"></span>
-      <button class="btn" id="fleetBtn" title="Fleet mode: discover every ESXi/vCenter bundle under a folder (recursively) and triage them all into one roster. Point the Bundle field at a parent folder, or use Pick folder.">Triage fleet folder&hellip;</button>
-      <label style="font-size:12px;margin-left:6px" title="Reuse a host's saved analysis from _Processed when the source bundle and tool version are unchanged - much faster on re-runs. Uncheck to force a full fresh re-analysis of every host."><input type="checkbox" id="fleetReuse" checked> reuse cached</label>
-      <label style="font-size:12px;margin-left:6px" title="Also read the ROTATED logs (hostd.0.gz, auth.1.gz, ...) - weeks of extra logon/action history instead of just the live file. Slower (decompresses each rotation). The vobd audit log is always read in full (rotations are small and it is the host's audit trail). vpxd reads its newest 4 rotations by default; this raises it to 12."><input type="checkbox" id="deepRot"> incl. rotated logs</label>
-      <label style="font-size:12px;margin-left:6px" title="Master network switch. When unticked the tool makes NO outbound connections: the GitHub update check, the live NVD CVE lookup, the zstd.exe download and the Field Manual fetch are all disabled. Analysis itself never needs the network. Persisted across sessions - untick it on an evidence-handling workstation."><input type="checkbox" id="netOn" checked> online (update check / NVD / zstd)</label>
-      <span class="sep"></span>
-      <button class="btn" id="logToggle">Show log</button>
+      <button class="btn" id="fleetBtn" title="Fleet mode: discover every ESXi/vCenter bundle under a folder (recursively) and triage them all into one roster. Point the Bundle field at a parent folder, or use Pick Folder.">Scan Fleet Folder (Multiple Bundles)</button>
+      <label style="font-size:12px;margin-left:6px" title="Reuse a host's saved analysis from _Processed when the source bundle and tool version are unchanged - much faster on re-runs. Uncheck to force a full fresh re-analysis of every host."><input type="checkbox" id="fleetReuse" checked> Use Cached Results</label>
+      <label style="font-size:12px;margin-left:6px" title="Also read the ROTATED logs (hostd.0.gz, auth.1.gz, ...) - weeks of extra logon/action history instead of just the live file. Slower (decompresses each rotation). The vobd audit log is always read in full (rotations are small and it is the host's audit trail). vpxd reads its newest 4 rotations by default; this raises it to 12."><input type="checkbox" id="deepRot"> Incl. Rotated Logs</label>
+      <label style="font-size:12px;margin-left:6px" title="Master network switch. When unticked the tool makes NO outbound connections: the GitHub update check, the live NVD CVE lookup, the zstd.exe download and the Field Manual fetch are all disabled. Analysis itself never needs the network. Persisted across sessions - untick it on an evidence-handling workstation."><input type="checkbox" id="netOn" checked> Online (Update Check / NVD / ZSTD)</label>
       <span class="muted" id="status" style="margin-left:8px"></span>
     </div>
     <div id="log"></div>
@@ -266,14 +266,22 @@
         <button class="btn" id="tabAct" data-tab="act" title="What was DONE, and by whom. ESXi: shell command history and hostd tasks. vCenter: meaningful vpxd tasks (*_Task, permission/role changes) attributed to the nearest preceding human login. Scored for suspicious commands - SSH enable, host-encryption change, mass power-off, firewall disable, payloads in /tmp, bulk VMDK ops.">Actions</button>
         <button class="btn" id="tabTime" data-tab="time" title="Logons and Actions merged into one time-ordered view - the sequence that turns isolated events into a story. Filter by score and by the case window (Set case window /from /to). Exports a Timeline-Explorer-friendly CSV.">Timeline</button>
         <button class="btn" id="tabPersist" data-tab="persist" title="Persistence &amp; tampering checks against what the bundle actually captured (anything not collected is marked 'not captured' rather than passed). DCUI banner ransom-note scan, rc.local.d boot persistence, remote syslog forwarding changes, VIB acceptance, SSH authorized_keys, cron/systemd units, ld.so.preload, and key-log integrity (empty / truncated / time gaps).">Persistence</button>
-        <button class="btn" id="tabIoc" data-tab="ioc" title="Hits for your IOC list (shared toolkit IOC.txt / IOC.csv - use 'Create IOC list' to edit) swept across the key logs present in this bundle, not the whole tree. IPs, users, hashes, filenames, keywords. Any hit scores +3 wherever it appears.">IOC hits</button>
+        <button class="btn" id="tabIoc" data-tab="ioc" title="Hits for your IOC list (shared toolkit IOC.txt / IOC.csv - use 'Create IOC List' to edit) swept across the key logs present in this bundle, not the whole tree. IPs, users, hashes, filenames, keywords. Any hit scores +3 wherever it appears.">IOC hits</button>
         <button class="btn orange hide" id="backRosterBtn" style="float:right" title="Return to the fleet roster (kept in memory - no re-scan)">&#9664; Fleet roster</button>
       </div>
-      <div class="roadmap">Logons / Actions / Timeline / Persistence / IOC parse the key logs &amp; config automatically after Analyze (Re-run on Overview). Overview shows the ransomware-indicator &amp; CVE-exposure panels; Generate Report writes every tab into one self-contained HTML. Case window (/from /to) filters Timeline &amp; Logons, never scores. Next: fleet / multi-host mode.</div>
+      <div class="roadmap">Logons / Actions / Timeline / Persistence / IOC parse the key logs &amp; config automatically after Analyze (Re-run on Overview). Security holds the ransomware-indicator &amp; CVE-exposure panels alongside the graded patch state; Generate Report writes every tab into one self-contained HTML. Case window (/from /to) filters Timeline &amp; Logons, never scores. Next: fleet / multi-host mode.</div>
     </div>
 
     <!-- OVERVIEW -->
     <div class="card" id="ovCard">
+      <!-- actions + headline counts sit ABOVE the node detail: they are what you act on first, and
+           the stat cards are the jump-off points into the analysis tabs. -->
+      <div style="border-bottom:1px solid #30363d;padding-bottom:10px;margin-bottom:12px">
+        <button class="btn" id="anBtn" title="Re-parse the key logs (auth/shell/hostd/websso/vpxd) into Logons, Actions, Timeline and re-sweep IOCs. Runs automatically after Analyze; click to re-run.">Re-run log analysis</button>
+        <button class="btn green" id="reportBtn" title="Generate a self-contained HTML report - every tab in one document (node config, maintenance, key files, specification, VMs, network, indicators, CVEs, security posture, persistence, logons, sessions, actions, timeline, IOC hits) - and open it.">Generate Report</button>
+        <span class="muted" id="anStatus" style="margin-left:8px;font-size:12px">Runs automatically after Analyze.</span>
+        <div id="anStats" style="margin-top:8px"></div>
+      </div>
       <h3>Node overview</h3>
       <div class="cards3">
         <div class="col3" style="width:49%">
@@ -284,14 +292,7 @@
           <div id="ovMissing" style="margin-top:8px"></div>
         </div>
       </div>
-      <div style="margin-top:12px;border-top:1px solid #30363d;padding-top:10px">
-        <button class="btn" id="anBtn" title="Re-parse the key logs (auth/shell/hostd/websso/vpxd) into Logons, Actions, Timeline and re-sweep IOCs. Runs automatically after Analyze; click to re-run.">Re-run log analysis</button>
-        <button class="btn green" id="reportBtn" title="Generate a self-contained HTML report - every tab in one document (node config, maintenance, key files, specification, VMs, network, indicators, CVEs, security posture, persistence, logons, sessions, actions, timeline, IOC hits) - and open it.">Generate Report</button>
-        <span class="muted" id="anStatus" style="margin-left:8px;font-size:12px">Runs automatically after Analyze.</span>
-        <div id="anStats" style="margin-top:8px"></div>
-      </div>
       <div id="ovMaintWrap" class="hide" style="margin-top:12px"><div id="ovMaint"></div></div>
-      <div id="ovCve" style="margin-top:12px"></div>
     </div>
 
     <!-- VMs -->
@@ -358,6 +359,7 @@
       <h3>Security posture <span class="muted" style="text-transform:none;font-weight:400" id="secScore"></span>
         <button class="btn green" id="secExport" style="float:right" title="Export a security-focused report (posture score, patch state/CVEs, intrusion indicators, control matrix, VIB integrity, persistence) to a self-contained HTML.">Export &rarr; HTML</button>
       </h3>
+      <div id="ovCve" style="margin-bottom:12px"></div>
       <div class="muted" style="font-size:11px;margin-bottom:8px">Graded review of patch state and recommended security controls, checked against the bundle's config captures AND the parsed log evidence. Support bundles are targeted - a control whose source is not captured is graded <b>n/a</b>, never assumed compliant. Verdicts are advisory - verify before reporting.</div>
       <div id="secBody"></div>
     </div>
@@ -446,7 +448,7 @@
       <li><b>Key Files</b> — curated high-value artifacts. <b>Logons / Actions / Timeline</b> — scored, colour-coded, filterable events. <b>Persistence</b> — file-inspection findings. <b>IOC hits</b> — sweeps an <code>IOC.txt</code> placed next to the app.</li>
     </ul>
     <h3>Fleet mode</h3>
-    <p>Point at a parent folder and click <b>Triage fleet folder…</b> for a risk roster, vSAN <b>cluster</b> grouping, and <b>cross-host correlation</b> (shared IPs/users/IOCs, coordinated indicators, and the <b>vCenter&rarr;ESXi task chain</b>).</p>
+    <p>Point at a parent folder and click <b>Scan Fleet Folder (Multiple Bundles)</b> for a risk roster, vSAN <b>cluster</b> grouping, and <b>cross-host correlation</b> (shared IPs/users/IOCs, coordinated indicators, and the <b>vCenter&rarr;ESXi task chain</b>).</p>
     <h3>Requirements &amp; tips</h3>
     <p>Windows 10/11 (ships bsdtar). <b>Run from a local drive</b> (<code>C:\</code>) — running from a network / OneDrive / redirected folder makes Windows fall back to a slower ANSI file reader. <code>.zst</code> vCenter logs need <code>zstd.exe</code> (the tool offers to fetch it). The version pill turns <span style="color:#7ee787">green</span> when current and <span style="color:#ff8b3d">orange</span> with an update link when a newer release exists; <b>Instructions</b> opens the latest Field Manual.</p>
     <p class="mono" style="font-size:12px"><span class="lnk" id="ghLink">github.com/bpmorris22/vSphere-SupportBundle-Analyzer</span> &middot; MIT</p>
@@ -475,7 +477,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.10";
+var APP_VERSION = "1.17.11";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -573,6 +575,31 @@ function gcNow(){ try{ if(gcAvailable()) CollectGarbage(); }catch(e){ GC_AVAIL=f
        _Processed\_fleet\_analyze-trace.txt   single runs  (new)
    Each line carries elapsed seconds and the process working set, so a crash report answers "where"
    AND "was memory climbing" without anyone having to argue about it afterwards. */
+/* ---- scan timer (house pattern, ported from vSphere-VM-Recovery) --------------------------------
+   How long a bundle actually took, on the header pill. Worth having on THIS app in particular: a
+   vCenter bundle legitimately costs several times an ESXi one (it has to merge the vpxd rotation set
+   before anything can be parsed), and without a visible clock that reads as a hang. The app is
+   single-threaded, so the pill freezes during a blocking step and then jumps - the tooltip says so
+   rather than letting it look broken. */
+var PROC_T0=0, PROC_TIMER=null;
+function procFmt(s){ var m=Math.floor(s/60), ss=s%60; return (m<10?"0":"")+m+":"+(ss<10?"0":"")+ss; }
+function procStart(what){
+  PROC_T0=(new Date()).getTime();
+  if(PROC_TIMER) window.clearInterval(PROC_TIMER);
+  PROC_TIMER=window.setInterval(procTick,500);
+  var el=$("procTimer"); if(el){ el.className="pill run"; el.innerHTML=(what||"Scanning")+" 00:00"; }
+  PROC_WHAT=what||"Scanning";
+}
+var PROC_WHAT="Scanning";
+function procTick(){ if(!PROC_T0) return; var el=$("procTimer"); if(!el) return;
+  el.innerHTML=PROC_WHAT+" "+procFmt(Math.floor(((new Date()).getTime()-PROC_T0)/1000)); }
+function procStop(ok){
+  if(PROC_TIMER){ window.clearInterval(PROC_TIMER); PROC_TIMER=null; }
+  if(!PROC_T0) return;
+  var s=Math.floor(((new Date()).getTime()-PROC_T0)/1000), el=$("procTimer");
+  if(el){ el.className=(ok===false?"pill bad":"pill ok"); el.innerHTML="Scan time "+procFmt(s); }
+  PROC_T0=0;
+}
 var TRACE_PATH="", TRACE_T0=0, TRACE_RUN=0, TRACE_MAXBYTES=2*1024*1024;
 /* v1.17.7: APPEND across the session instead of truncating per run.
    v1.17.6 re-created the file on every Analyze, so analysing bundle A then bundle B left only B's
@@ -686,7 +713,7 @@ function esc(s){ if(s==null) return ""; s=String(s);
 function nf(n){ n=String(n); var r="",c=0; for(var k=n.length-1;k>=0;k--){ r=n.charAt(k)+r; c++; if(c%3===0&&k>0) r=","+r; } return r; }
 function setStatus(msg,cls){ var el=$("status"); el.innerHTML=esc(msg); el.className=cls||"muted"; }
 function appendLog(t){ var el=$("log"); if(el.getAttribute("data-ph")==="1"){ el.innerHTML=""; el.setAttribute("data-ph","0"); }
-  el.style.display="block"; $("logToggle").innerHTML="Hide log"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
+  el.style.display="block"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
 function trimStr(s){ return String(s).replace(/^\s+|\s+$/g,""); }
 function baseName(p){ if(!p) return ""; p=String(p); var i=Math.max(p.lastIndexOf("\\"),p.lastIndexOf("/")); return i>=0?p.substring(i+1):p; }
 function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/\s*\bhide\b/g,""); e.className = vis ? c : (c+" hide"); }
@@ -1157,7 +1184,7 @@ function analyze(){
   /* single runs get their OWN trace file. v1.17.5 merely CLEARED the fleet path here, which stopped a
      stale fleet trace absorbing this run's lines but left single-Analyze with no crash trace at all -
      precisely the gap that made the "crashed after processing" report undiagnosable. */
-  traceInit("analyze");
+  traceInit("analyze"); procStart("Scanning");
   trace("analyze: input="+inp+" out="+outdir);
   $("anStats").innerHTML=""; $("ovIndic").innerHTML=""; $("ovCve").innerHTML=""; $("anStatus").innerHTML="Logons / Actions / Timeline / Persistence / IOC not parsed yet.";
 
@@ -1945,6 +1972,33 @@ function parseMaint(){
   appendLog("  maintenance: "+nf(MAINT.length)+" event(s)"+(MAINT_TOTAL>MAINT.length?(" (newest 400 of "+nf(MAINT_TOTAL)+")"):""));
 }
 function maintCls(k){ return k==="update"?"audit":(k==="maintenance"?"net":(k==="boot"?"auth":"danger")); }
+/* ---- display labels for short enum values (v1.17.11) --------------------------------------------
+   These values are stored LOWERCASE and stay that way internally - the filter dropdowns, CSV/JSON
+   exports, snapshot files and the HTML report all key off them, so changing the stored value would
+   break every one of those. Only the RENDERING is capitalised, and every value carries a tooltip
+   saying what it actually means: "service" or "modify" is not self-explanatory to someone reading a
+   case note six months later. */
+function capLabel(s){ s=String(s==null?"":s); return s ? (s.charAt(0).toUpperCase()+s.substring(1)) : ""; }
+var KIND_TIPS=[
+  /* maintenance kinds */
+  [/^boot$/i,        "The node booted. On ESXi this is the host's own esx.audit.host.boot record; on vCenter it is usually derived from capture time minus uptime, which the Detail column states."],
+  [/^reboot$/i,      "A restart was initiated - and, where the platform recorded one, the reason it gave. A reboot inside an incident window is worth explaining."],
+  [/^shutdown$/i,    "The node was shut down (not rebooted). On a host that should run continuously this is itself an event to account for."],
+  [/^maintenance$/i, "Maintenance mode entered or exited. Bulk VM movement and service interruption during this window is expected rather than suspicious."],
+  [/^update$/i,      "Patching or image change - VIB install, image-profile update, or an appliance patch run. Gives every other finding a backdrop: the same action reads differently inside a patch window."],
+  [/^service$/i,     "A platform service restarted (vCenter's vpxd records its own last start). On a vc-support bundle this is the closest thing to a reboot marker."],
+  /* action / timeline kinds */
+  [/^logon$/i,           "An authentication event - see the Logons tab for the full row including result, source IP and method."],
+  [/^shell command/i,    "A command typed into the ESXi Shell (shell.log). The Shell is off by default, so anything here means an interactive operator - or an intruder - was on the host."],
+  [/^sudo command/i,     "A command run via sudo on the appliance (auth.log). Root-equivalent activity on the vCenter appliance itself, not the vSphere API."],
+  [/^vpxd task/i,        "A vCenter API operation from the vpxd task stream. \"session-matched\" means the actor was tied to the task by session GUID (exact); \"user approx\" means it was attributed to the nearest preceding login within the capped window, and may be wrong."],
+  [/^audit event/i,      "An entry from the host's own esx.audit.* stream (vobd) - the host's account of itself, independent of shell.log, so it can corroborate activity even when the shell history is gone."],
+  [/^software change/i,  "A VIB or image-profile change from esxupdate.log. Legitimate patching looks like this too - check it against the Maintenance events."],
+  [/^SSO identity/i,     "An identity operation from the SSO audit log - user/group creation, membership, password or policy change. This is where a rogue SSO admin shows up."],
+  [/^appliance command/i,"A non-routine command executed on the appliance, decoded from Linux auditd EXECVE records. Routine VMware automation is filtered out, so what remains is unusual by construction."],
+  [/^VAMI appliance-mgmt/i,"An appliance-management (VAMI) change. Only WRITE operations are surfaced - the stream is over 90% configuration reads."]
+];
+function kindTip(k){ k=String(k||""); for(var i=0;i<KIND_TIPS.length;i++){ if(KIND_TIPS[i][0].test(k)) return KIND_TIPS[i][1]; } return ""; }
 function renderMaint(){
   if(!MAINT.length){ $("ovMaint").innerHTML=""; showEl("ovMaintWrap",false); return; }
   showEl("ovMaintWrap",true);
@@ -1961,7 +2015,7 @@ function renderMaint(){
     +'</tr></thead><tbody>';
   for(var i=0;i<MAINT.length;i++){ var e=MAINT[i];
     h+='<tr><td class="mono">'+esc(e.when)+'</td>'
-      +'<td><span class="tag '+maintCls(e.kind)+'">'+esc(e.kind)+'</span></td>'
+      +'<td><span class="tag '+maintCls(e.kind)+'" title="'+esc(kindTip(e.kind))+'">'+esc(capLabel(e.kind))+'</span></td>'
       +'<td>'+esc(e.what)+'</td>'
       +'<td class="mono muted" style="font-size:11px" title="'+esc(e.detail)+'">'+esc(trunc(e.detail,90)||"-")+'</td>'
       +'<td class="mono muted" style="font-size:11px">'+esc(e.src)+'</td></tr>'; }
@@ -2232,7 +2286,15 @@ var VPXD_KEEP=4, VPXD_KEEP_DEEP=12, VPXD_OLDCAP=16*1024*1024;
    read them: measured byte offsets show every name lands in the first 0.6 MB, and a 8 MB head
    captures 114 of the 116. So - bounded HEAD read, regex for the name pattern only, text dropped
    immediately, and it stops as soon as nothing is still unresolved. */
-var VPXD_NAME_FILES=6, VPXD_NAME_HEAD=8*1024*1024, VPXD_NAMES_NOTE="";
+/* v1.17.11 - BUDGETED. A deep-rot run measured the real cost: the oldest rotation resolved 13 of 18
+   wanted names in 10.4 s, and the next FIVE files then cost ~10.6 s each and resolved NOTHING - 53 s
+   of a 100 s vCenter scan spent for zero gain (the ESXi bundle beside it took 11 s). Each file is
+   expensive because the whole rotation has to be gunzipped before its head can be read.
+   A name can legitimately sit in any rotation, so exhaustive scanning is unbounded (19 unread files
+   here = ~200 s). Instead: the oldest file is always worth it (vpxd's startup inventory enumeration
+   lives there), and after that we stop as soon as a file yields nothing wanted, or the clock runs
+   out. Whatever is left is DISCLOSED rather than silently unnamed. */
+var VPXD_NAME_FILES=4, VPXD_NAME_HEAD=8*1024*1024, VPXD_NAME_MS=20000, VPXD_NAMES_NOTE="";
 /* `want` is the SET of MoRefs still unnamed (keys), not a count. v1.17.9 passed a count and
    decremented it for EVERY newly-learned name, including the ~100 that were nothing to do with the
    unresolved rows - so it hit zero inside the first file and stopped, leaving the genuinely wanted
@@ -2252,25 +2314,35 @@ function vpxdHarvestNames(map, want){
   /* interleave oldest / newest-unread so one pass covers both long-lived and recent VMs */
   var order=[], lo=0, hi=extra.length-1;
   while(lo<=hi){ order.push(extra[lo++]); if(lo<=hi) order.push(extra[hi--]); }
+  var t0=new Date().getTime(), stop="";
   for(i=0;i<order.length && i<VPXD_NAME_FILES && need>0; i++){
+    if(scanned && (new Date().getTime()-t0)>VPXD_NAME_MS){ stop="time budget of "+(VPXD_NAME_MS/1000)+"s reached"; break; }
     var rel=order[i];
     trace("    vpxd name harvest: "+baseName(rel)+" ("+need+" still wanted)");
     var src=ensureExtracted(rel); if(!src) continue;
     if(/\.(gz|zst)$/i.test(src)){ var v=viewablePath(src); if(!v) continue; src=v; }
     var txt=readCappedText(src, VPXD_NAME_HEAD); scanned++;
     if(!txt) continue;
+    var gotHere=0;
     VM_NAME_RE.lastIndex=0;
     while((m=VM_NAME_RE.exec(txt))){
       var mo=m[1];                                           // raw MoRef, matching vmName ("vm-<digits>")
       if(map[mo]==null){ map[mo]=trimStr(m[2]); found++; }
-      if(want[mo]){ delete want[mo]; need--; }               // only a WANTED name counts down
+      if(want[mo]){ delete want[mo]; need--; gotHere++; }    // only a WANTED name counts down
     }
     txt=null;                                                // drop the head before the next file
     gcNow();
+    /* the oldest file is the high-yield one; once a LATER file adds nothing wanted, more of them
+       almost never do - and each costs ~10 s. Stop rather than burn the clock. */
+    if(!gotHere && scanned>=2){ stop="no further wanted names in the last rotation scanned"; break; }
   }
-  if(found){ VPXD_NAMES_NOTE=found+" VM name(s) recovered from "+scanned+" vpxd rotation(s) outside the analysed window"
-      +(need?("; "+need+" MoRef(s) still unnamed - not present in the rotations scanned"):"");
-    appendLog("  "+VPXD_NAMES_NOTE); }
+  if(found || need){
+    VPXD_NAMES_NOTE=found+" VM name(s) recovered from "+scanned+" vpxd rotation(s) outside the analysed window"
+      +(need?("; "+need+" MoRef(s) still unnamed"+(stop?(" - harvest stopped: "+stop):" - not present in the rotations scanned")
+              +". Their names are not in the rotations read; widen 'Incl. Rotated Logs' or open the VM in vCenter to name it."):"");
+    appendLog("  "+VPXD_NAMES_NOTE);
+    trace("    vpxd name harvest: done - "+found+" recovered, "+need+" still unnamed"+(stop?(" ("+stop+")"):""));
+  }
   return found;
 }
 function vpxdAllRels(){
@@ -2302,7 +2374,7 @@ function vpxdLines(){
   }
   VPXD_SRCNOTE = names.length>1 ? (names[0]+" … "+names[names.length-1]+" ("+names.length+" files)") : (names[0]||"");
   if(all.length>sel.length){
-    var note="vpxd: "+(all.length-sel.length)+" older rotation(s) not read (newest "+sel.length+" of "+all.length+(DEEPROT?"":"; tick 'incl. rotated logs' for more")+")";
+    var note="vpxd: "+(all.length-sel.length)+" older rotation(s) not read (newest "+sel.length+" of "+all.length+(DEEPROT?"":"; tick 'Incl. Rotated Logs' for more")+")";
     LOG_TRUNC.push(note); appendLog("  "+note);
   }
   if(names.length) appendLog("  vpxd set: "+names.join(", ")+" -> "+nf(out.length)+" lines (chronological)");
@@ -2471,7 +2543,7 @@ function iocCount(){
   return -1;
 }
 function iocBtnLabel(){ var b=$("iocBtn"); if(!b) return; var n=iocCount();
-  b.innerHTML = (n>0) ? ("Edit IOC list ("+n+")") : "Create IOC list"; }
+  b.innerHTML = (n>0) ? ("Edit IOC List ("+n+")") : "Create IOC List"; }
 function openIocEditor(){
   if(!htaFolder()){ setStatus("Can't locate the app folder to store the IOC list.","err"); return; }
   IOC_ROWS=iocLoadCsv();
@@ -3551,7 +3623,7 @@ function runAnalysis(){
       trace("tail: writeAnalysisOutputs"); writeAnalysisOutputs();
       trace("tail: amendRunInfo"); amendRunInfo();
       var msg=nf(LOGON.length)+" logons, "+nf(ACTIONS.length)+" actions, "+nf(TIMELINE.length)+" timeline, "+nf(IOCHITS.length)+" IOC hits.";
-      var warn=ANALYSIS_ERRS.length?("  ("+ANALYSIS_ERRS.length+" stage(s) failed: "+ANALYSIS_ERRS.join(", ")+" - see Show log)"):"";
+      var warn=ANALYSIS_ERRS.length?("  ("+ANALYSIS_ERRS.length+" stage(s) failed: "+ANALYSIS_ERRS.join(", ")+" - see Show/Hide Log)"):"";
       $("anStatus").innerHTML=msg+warn+(LOG_TRUNC.length?("  (capped: "+LOG_TRUNC.join("; ")+")"):"");
       setStatus((ANALYSIS_ERRS.length?"Log analysis finished with "+ANALYSIS_ERRS.length+" partial failure(s) - ":"Log analysis complete - ")+msg, ANALYSIS_ERRS.length?"err":"ok");
       trace("tail: renderAnStats"); renderAnStats();
@@ -3559,8 +3631,8 @@ function runAnalysis(){
       trace("tail: render TAB="+TAB);
       if(TAB==="overview") renderOverview(); else if(TAB!=="inv") render();   // Overview depends on analysis output (stats / maintenance / CVE) - it must repaint too
       trace("tail: release caches"); logCacheClear(); VPXD_LINES=null; gcNow();   // every consumer has run - release the cached line sets (can be 100+ MB)
-      trace("runAnalysis: COMPLETE");
-    }catch(e2){ BUSY=false; $("anBtn").disabled=false; trace("runAnalysis: THREW "+(e2&&e2.message?e2.message:e2)); setStatus("Analysis phase failed: "+e2.message,"err"); } }, 30);
+      procStop(true); trace("runAnalysis: COMPLETE");
+    }catch(e2){ BUSY=false; $("anBtn").disabled=false; procStop(false); trace("runAnalysis: THREW "+(e2&&e2.message?e2.message:e2)); setStatus("Analysis phase failed: "+e2.message,"err"); } }, 30);
   }, 30);
 }
 /* A case-window change alters what bfAnalyze() sees - it filters on inWin() precisely so "the
@@ -4520,7 +4592,7 @@ function buildSecurity(){
   for(i=0;i<CVES.length;i++){ if(CVES[i].verdict==="exposed") exp++; else if(CVES[i].verdict==="review") rev++; }
   var bld=(NODE.version?NODE.version+" ":"")+(NODE.build||"");
   if(CVES.length) secAdd(GP,"Known-CVE exposure (advisory)", exp?"fail":(rev?"warn":"pass"),
-    "running "+bld+" - "+exp+" exposed / "+rev+" review / "+(CVES.length-exp-rev)+" clear of "+CVES.length+" tracked CVEs; see the Overview CVE panel + VMSA links");
+    "running "+bld+" - "+exp+" exposed / "+rev+" review / "+(CVES.length-exp-rev)+" clear of "+CVES.length+" tracked CVEs; the per-CVE table with VMSA links is directly above");
   else secAdd(GP,"Known-CVE exposure","na","no CVE checks apply to this bundle type/version");
   if(BTYPE==="esxi"){
     // --- hardening (config captures) ---
@@ -5532,7 +5604,7 @@ function renderVmEvents(){
       +(BTYPE==="vcsa"
         ? 'No VM lifecycle tasks in the retained <span class="mono">vpxd</span> window - no create / delete / modify / power / snapshot / migrate operations were logged. Tick <b>incl. rotated logs</b> and re-Analyze to search the rotations as well.'
         : 'No VM lifecycle tasks in the retained <span class="mono">hostd</span> window. ESXi <span class="mono">/var/run/log</span> is a RAM disk, so the live log only covers since the last boot - tick <b>incl. rotated logs</b> and re-Analyze to reach further back.')
-      +' If you expected events here, open <b>Show log</b> and look for a <span class="mono">[vmevents] FAILED</span> line.</td></tr></tbody>';
+      +' If you expected events here, open <b>Show/Hide Log</b> and look for a <span class="mono">[vmevents] FAILED</span> line.</td></tr></tbody>';
     $("vmEvNote").innerHTML=capWarn; return; }
   var rows=vmEvFiltered(), i;
   var cnt={}; for(i=0;i<VMEV.length;i++) cnt[VMEV[i].kind]=(cnt[VMEV[i].kind]||0)+1;
@@ -6500,13 +6572,13 @@ function triageFleet(){
   if(BUSY){ setStatus("Busy - wait for the current run.","err"); return; }
   RUNID++; try{ nvdAbort(); }catch(eNA){}   // a fleet run also invalidates any single-run callbacks still in flight
   var root=trimStr($("inPath").value);
-  if(!folderExists(root)){ setStatus("Fleet mode: point the Bundle field (or Pick folder) at a FOLDER that contains the bundles.","err"); return; }
+  if(!folderExists(root)){ setStatus("Fleet mode: point the Bundle field (or Pick Folder) at a FOLDER that contains the bundles.","err"); return; }
   try{ FLEET_REUSE = !!$("fleetReuse").checked; }catch(e){ FLEET_REUSE=true; }
   try{ DEEPROT = !!$("deepRot").checked; }catch(eDR){ DEEPROT=false; }
   appendLog("=== FLEET discovery under "+root+" ==="+(FLEET_REUSE?" (reuse cached analysis where source unchanged)":" (forced fresh re-analysis)"));
   setStatus("Fleet: scanning "+root+" for bundles…","muted");
   FLEET=[]; FLEET_HOSTS={}; FLEET_I=0;
-  ensureDir(fleetBase()); traceInit("fleet");   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
+  ensureDir(fleetBase()); traceInit("fleet"); procStart("Fleet scan");   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
   trace("triageFleet start; root="+root);
   try{ FLEET_CANDS=discoverBundles(root); }
   catch(eDisc){ FLEET_CANDS=[]; setStatus("Fleet discovery failed while scanning "+root+": "+(eDisc&&eDisc.message?eDisc.message:eDisc)+" - try pointing at the folder that directly holds the bundles.","err"); appendLog("Fleet discovery error: "+(eDisc&&eDisc.message?eDisc.message:eDisc)); return; }
@@ -6564,7 +6636,7 @@ function fleetDone(){
   setStatus("Fleet triage complete - "+FLEET.length+" host(s) from "+FLEET_CANDS.length+" candidate(s).","ok");
   var nc=0,seen={}; for(var i=0;i<FLEET.length;i++){ if(FLEET[i].clusterUuid&&!seen[FLEET[i].clusterUuid]){ seen[FLEET[i].clusterUuid]=1; nc++; } }
   $("fleetInfo").innerHTML=FLEET.length+" host(s), "+nc+" cluster(s) &middot; "+fleetBase();
-  trace("fleetDone: COMPLETE");
+  procStop(true); trace("fleetDone: COMPLETE");
 }
 function fmtAnalyzed(r){ var t=r.analyzedAt?isoShort(r.analyzedAt):"-";
   var tag = r.reused ? ' <span class="tag cmd" title="Reused from _Processed - source bundle unchanged">cached</span>'
@@ -6842,7 +6914,7 @@ function renderOverview(){
   if(miss.length){ var mh='<div class="muted" style="font-size:12px"><b style="color:#e3b341">Absent critical artifacts</b> (each is itself a finding):<br>';
     mh+=esc(miss.join(", "))+"</div>"; $("ovMissing").innerHTML=mh; }
   else $("ovMissing").innerHTML='<div class="ok" style="font-size:12px">All critical artifacts present.</div>';
-  renderAnStats(); renderMaint(); renderCves();   // indicators moved to the Security tab (rendered by renderSecurity)
+  renderAnStats(); renderMaint();   // CVE panel + indicators both live on the Security tab now (rendered by renderSecurity)
 }
 /* Owns the visibility of its own card: analysis finishing calls render() (NOT setTab), so if the user is
    already sitting on the Security tab when it completes, setTab's showEl never re-runs - deciding here
@@ -7032,6 +7104,7 @@ function indTip(it){
 function secDotCls(s){ return s==="fail"?"hit":(s==="warn"?"warn":(s==="review"?"vfy":(s==="na"?"na":""))); }
 function secStCls(s){ return s==="fail"?"hit":(s==="warn"?"warn":(s==="review"?"vfy":(s==="na"?"na":"clear"))); }
 function renderSecurity(){
+  renderCves();         // v1.17.11: the full CVE table moved here from Overview, beside its Patch state summary
   renderIndicators();   // the intrusion / ransomware panel sits above Security posture - render it even if
                         // posture itself has nothing to grade (it is a separate card)
   if(!ANALYZED || !SECPOST.length){
@@ -7156,7 +7229,7 @@ function tagsHtml(r){ var h=""; for(var i=0;i<r.tags.length;i++){ var t=r.tags[i
   h+='<span class="tag '+tagCls(t)+'" title="'+esc(r.reasons.join("; "))+'">'+esc(t)+'</span>'; } return h; }
 function kindLabel(k){ k=String(k||""); var lk=lc(k);
   var color = /shell command/.test(lk)?"#ff6b6b" : (/sudo/.test(lk)?"#f0883e" : (/vpxd|task/.test(lk)?"#79c0ff" : (/logon/.test(lk)?"#8b949e":"#c9d1d9")));
-  return '<span style="color:'+color+(/shell command/.test(lk)?";font-weight:700":"")+'">'+esc(k)+'</span>'; }
+  return '<span style="color:'+color+(/shell command/.test(lk)?";font-weight:700":"")+'" title="'+esc(kindTip(k))+'">'+esc(capLabel(k))+'</span>'; }
 function scoreCell(r){ return '<td class="first"><span class="sc '+scClass(r.score)+'">'+r.score+'</span>&nbsp; '+tagsHtml(r)+'</td>'; }
 function rowCls(r){ var c=""; if(r.score>=5) c="row-flag"; else if(r.score>=3) c="row-warn"; var isI=false; for(var i=0;i<r.tags.length;i++) if(r.tags[i]==="IOC") isI=true; if(isI) c+=(c?" ":"")+"ioc"; return c; }
 function anPass(r,useWin){ if(FLAGONLY && r.score<3) return false; if(!scorePass(r.score)) return false; if(TQUERY && r.blob.indexOf(TQUERY)<0) return false; if(useWin && (DFROM||DTO) && r.epoch && !inWin(r.epoch)) return false; return true; }
@@ -7237,7 +7310,7 @@ var ACOLS=[
 ];
 function renderAct(){
   fillFilterSel("actActor", mapField(ACTIONS,"actor"), ACT_ACTOR);
-  fillFilterSel("actKind", mapField(ACTIONS,"akind"), ACT_KIND);
+  fillFilterSel("actKind", mapField(ACTIONS,"akind"), ACT_KIND, true);
   var rows=[]; for(var i=0;i<ACTIONS.length;i++){ var r=ACTIONS[i]; if(!anPass(r,false)) continue;
     if(ACT_ACTOR && r.actor!==ACT_ACTOR) continue; if(ACT_KIND && r.akind!==ACT_KIND) continue; rows.push(r); }
   sortRows(rows,ACOLS,SORT.act); drawTable(ACOLS,rows,SORT.act,"act");
@@ -7273,7 +7346,7 @@ var TCOLS=[
   {h:"Log", sk:function(r){return r.src;}, cell:function(r){return '<td class="mono muted">'+esc(r.src)+'</td>';}}
 ];
 function renderTime(){
-  fillFilterSel("timeKind", mapField(TIMELINE,"kind"), TIME_KIND);
+  fillFilterSel("timeKind", mapField(TIMELINE,"kind"), TIME_KIND, true);
   var rows=[]; for(var i=0;i<TIMELINE.length;i++){ var r=TIMELINE[i]; if(!anPass(r,true)) continue;
     if(TIME_KIND && r.kind!==TIME_KIND) continue; rows.push(r); }
   sortRows(rows,TCOLS,SORT.time); drawTable(TCOLS,rows,SORT.time,"time");
@@ -7292,7 +7365,7 @@ function mapField(arr,f){ var o=[]; for(var i=0;i<arr.length;i++) o.push(arr[i][
 var IOCCOLS=[
   {h:"Log", t:"Which log the hit was found in. The sweep covers the key logs present in this bundle, not the whole tree.", sk:function(r){return lc(r.file);}, cell:function(r){return '<td class="mono first" title="'+esc(r.file)+'">'+esc(r.file)+'</td>';}},
   {h:"Line", t:"Line number within that log, so you can cite it and find it again.", sk:function(r){return r.line;}, cell:function(r){return '<td class="mono" style="text-align:right">'+esc(r.line)+'</td>';}},
-  {h:"IOC", t:"The term from your IOC list that matched (IOC.csv / IOC.txt next to the app - edit it with Create IOC list).", sk:function(r){return r.ioc;}, cell:function(r){return '<td class="mono"><span class="tag ioc">'+esc(r.ioc)+'</span></td>';}},
+  {h:"IOC", t:"The term from your IOC list that matched (IOC.csv / IOC.txt next to the app - edit it with Create IOC List).", sk:function(r){return r.ioc;}, cell:function(r){return '<td class="mono"><span class="tag ioc">'+esc(r.ioc)+'</span></td>';}},
   {h:"Excerpt", t:"The matching line. Any IOC hit scores +3 wherever it appears.", sk:function(r){return lc(r.excerpt);}, cell:function(r){return '<td class="mono" title="'+esc(r.excerpt)+'">'+esc(trunc(r.excerpt,150))+'</td>';}}
 ];
 function renderIoc(){ var rows=[]; for(var i=0;i<IOCHITS.length;i++){ if(TQUERY){ var bl=lc(IOCHITS[i].file+" "+IOCHITS[i].ioc+" "+IOCHITS[i].excerpt); if(bl.indexOf(TQUERY)<0) continue; } rows.push(IOCHITS[i]); }
@@ -7373,14 +7446,18 @@ function freezeThs(sc){ if(!sc) return; var t=sc.getElementsByTagName("table")[0
 function wireFreeze(container){ if(!container) return; var divs=container.getElementsByTagName("div"), i;
   for(i=0;i<divs.length;i++){ var d=divs[i]; if(/(^|\s)scroll(\s|$)/.test(d.className+"")){ d.onscroll=(function(sc){ return function(){ freezeThs(sc); }; })(d); freezeThs(d); } } }
 /* populate a filter <select> with (all)+distinct values, preserving the current selection */
-function fillFilterSel(id, values, cur){ var el=$(id); if(!el) return; var seen={}, vs=[], i;
+/* `cap` capitalises only what the user SEES. The option's value stays the raw stored string, because
+   the filters compare against it (r.akind!==ACT_KIND) - capitalising the value would silently match
+   nothing. Used for the Kind selects; never for actors/usernames/guest-OS, where the original casing
+   is the evidence. */
+function fillFilterSel(id, values, cur, cap){ var el=$(id); if(!el) return; var seen={}, vs=[], i;
   /* "#" prefix - values are log-derived (actors, kinds, guest-OS strings); an unprefixed "constructor"
      or "toString" reads truthy off Object.prototype and would silently drop that option. */
   for(i=0;i<values.length;i++){ var v=values[i]; if(v==null||v==="") continue; var k="#"+lc(v); if(!seen[k]){ seen[k]=1; vs.push(String(v)); } }
   vs.sort(function(a,b){ a=lc(a); b=lc(b); return a<b?-1:(a>b?1:0); });
   var found=false, h='<option value="">(all)</option>';
-  for(i=0;i<vs.length;i++){ var sel=(vs[i]===cur); if(sel) found=true; h+='<option value="'+esc(vs[i])+'"'+(sel?' selected':'')+'>'+esc(vs[i])+'</option>'; }
-  if(cur && !found) h+='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>';   // keep a stale selection visible
+  for(i=0;i<vs.length;i++){ var sel=(vs[i]===cur); if(sel) found=true; h+='<option value="'+esc(vs[i])+'"'+(sel?' selected':'')+'>'+esc(cap?capLabel(vs[i]):vs[i])+'</option>'; }
+  if(cur && !found) h+='<option value="'+esc(cur)+'" selected>'+esc(cap?capLabel(cur):cur)+'</option>';   // keep a stale selection visible
   el.innerHTML=h; }
 /* export / copy for analysis tabs */
 function anExport(){ var rows=window.__anRows||[]; if(!rows.length){ setStatus("Nothing to export.","err"); return; }
@@ -7622,7 +7699,7 @@ function init(){
   try{ window.onerror=function(msg,url,line){
     try{ BUSY=false; $("fleetBtn").disabled=false; $("procBtn").disabled=false; }catch(eB){}
     try{ appendLog("SCRIPT ERROR: "+msg+(line?(" (line "+line+")"):"")); }catch(eL){}
-    try{ setStatus("Script error - see Show log: "+msg,"err"); }catch(eS){}
+    try{ setStatus("Script error - see Show/Hide Log: "+msg,"err"); }catch(eS){}
     return true;
   }; }catch(eOE){}
   try{ window.resizeTo(1360,920); }catch(e){}
@@ -7686,8 +7763,8 @@ function init(){
   $("logToggle").onclick=function(){ var l=$("log");
     if(l.style.display==="none"||!l.style.display){
       if(!trimStr(l.innerHTML.replace(/<[^>]*>/g,""))){ l.innerHTML='<span class="muted">(empty - extraction / parse output appears here.)</span>'; l.setAttribute("data-ph","1"); }
-      l.style.display="block"; this.innerHTML="Hide log"; }
-    else { l.style.display="none"; this.innerHTML="Show log"; } };
+      l.style.display="block"; }
+    else { l.style.display="none"; } };
 
   var tb=$("tabbar").getElementsByTagName("button");
   for(var i=0;i<tb.length;i++){ tb[i].onclick=function(){ userTab(this.getAttribute("data-tab")); }; }
