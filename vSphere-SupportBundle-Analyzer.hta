@@ -475,7 +475,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.5";
+var APP_VERSION = "1.17.6";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -551,17 +551,78 @@ function logCacheClear(){ LOGCACHE={}; LOGCACHE_BYTES=0; MEMCACHE={}; MEMCACHE_N
    accumulate until the process is killed with no catchable error. Calling this between heavy stages
    keeps peak memory near single-Analyze levels. No-op where CollectGarbage is absent (e.g. tests). */
 function gcNow(){ try{ if(typeof CollectGarbage!=="undefined") CollectGarbage(); }catch(e){} }
-/* crash tracer (v1.17.4): the on-screen log dies with the app, so a silent close leaves no clue where
-   it happened. This appends one line per fleet stage to _fleet\_fleet-trace.txt and CLOSES the handle
-   each time, so the write is flushed to disk immediately - the last line in that file after a crash
-   names the exact stage that killed it. Cheap enough to leave on. */
-var FLEET_TRACE_PATH="";
-function fleetTraceInit(){ try{ FLEET_TRACE_PATH=fleetBase()+"\\_fleet-trace.txt";
-  var fso=new ActiveXObject("Scripting.FileSystemObject"); var f=fso.CreateTextFile(FLEET_TRACE_PATH,true,false);
-  f.WriteLine("# fleet trace - app v"+APP_VERSION+" - if the app closed, the LAST line is the stage that crashed"); f.Close();
-}catch(e){ FLEET_TRACE_PATH=""; } }
-function fleetTrace(msg){ if(!FLEET_TRACE_PATH) return; try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
-  var f=fso.OpenTextFile(FLEET_TRACE_PATH,8,true); f.WriteLine(msg); f.Close(); }catch(e){} }
+/* ---- crash tracer (v1.17.4, generalised in v1.17.6) ------------------------------------------
+   The on-screen log dies with the app, so a silent close leaves no clue where it happened. This
+   appends one line per stage and CLOSES the handle each time, so every write is flushed - after a
+   crash the LAST line names the stage that killed it.
+   v1.17.6: it used to cover FLEET MODE ONLY. A single-Analyze crash left no trace at all (and
+   v1.17.5 made that slightly worse by clearing the path on Analyze, which stopped single runs from
+   even appending to a fleet trace left over from earlier in the session). Both modes now get their
+   own file in the same predictable place:
+       _Processed\_fleet\_fleet-trace.txt     fleet runs   (unchanged name - v1.17.4 contract)
+       _Processed\_fleet\_analyze-trace.txt   single runs  (new)
+   Each line carries elapsed seconds and the process working set, so a crash report answers "where"
+   AND "was memory climbing" without anyone having to argue about it afterwards. */
+var TRACE_PATH="", TRACE_T0=0;
+function traceInit(kind){
+  try{
+    var b=fleetBase(); if(!b){ TRACE_PATH=""; return; }
+    ensureDir(b);
+    TRACE_PATH=b+"\\_"+kind+"-trace.txt"; TRACE_T0=new Date().getTime();
+    WMI_PID=-1; TRACE_MEM=true; TRACE_MEM_LAST=0; TRACE_MEM_PEAK=0;   // fresh sampling state per run
+    var fso=new ActiveXObject("Scripting.FileSystemObject"); var f=fso.CreateTextFile(TRACE_PATH,true,false);
+    f.WriteLine("# "+kind+" trace - app v"+APP_VERSION+" - if the app closed, the LAST line is the stage that crashed");
+    f.WriteLine("# format:  <elapsed s> | <mshta working set MB> | <stage>    (blank MB = WMI unavailable)");
+    f.Close();
+  }catch(e){ TRACE_PATH=""; }
+}
+/* mshta's own working set in MB. The OOM theory behind v1.17.3 has only ever been ARGUED, never
+   measured - this measures it.
+   THROTTLED, because a WMI process bind is expensive: measured on this class of machine at ~128 ms
+   per call even with the service object cached (PowerShell's [wmi] accessor and a cached
+   SWbemServices.Get both came out the same, so it is WMI itself, not the binding style). Sampling
+   every stage would have added ~3 s to a single analysis and ~10 s to a fleet run - a real
+   regression to chase a hypothesis. One sample per TRACE_MEM_EVERY ms is ample: memory pressure is
+   a trend, not a per-stage value, and the stage/elapsed columns (which are free) already give the
+   "where". Lines between samples simply leave the column blank, and the last sample before a crash
+   is at most that far stale. Any failure disables sampling outright - the tracer exists to diagnose
+   crashes and must never cause one, or slow the app down hunting a number it cannot get. */
+var WMI_SVC=null, WMI_PID=-1, TRACE_MEM=true, TRACE_MEM_LAST=0, TRACE_MEM_EVERY=5000, TRACE_MEM_PEAK=0;
+function selfPidWmi(){
+  if(WMI_PID>=0) return WMI_PID;
+  WMI_PID=0;
+  try{
+    if(!WMI_SVC) WMI_SVC=GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2");
+    var want=lc(SELF_HTA);
+    var procs=WMI_SVC.ExecQuery("SELECT ProcessId,CommandLine FROM Win32_Process WHERE Name='mshta.exe'");
+    var e=new Enumerator(procs);
+    for(; !e.atEnd(); e.moveNext()){ var p=e.item();
+      if(lc(String(p.CommandLine||"")).indexOf(want)>=0){ WMI_PID=p.ProcessId; break; } }
+  }catch(ex){ WMI_PID=0; }
+  return WMI_PID;
+}
+function traceMemMb(){
+  if(!TRACE_MEM) return "";
+  var now=new Date().getTime();
+  if(TRACE_MEM_LAST && (now-TRACE_MEM_LAST)<TRACE_MEM_EVERY) return "";   // throttled - blank column
+  TRACE_MEM_LAST=now;
+  try{
+    var pid=selfPidWmi(); if(!pid){ TRACE_MEM=false; return ""; }
+    var p=WMI_SVC.Get("Win32_Process.Handle='"+pid+"'");
+    var mb=Math.round(p.WorkingSetSize/1048576);
+    if(mb>TRACE_MEM_PEAK) TRACE_MEM_PEAK=mb;
+    return mb+" MB (peak "+TRACE_MEM_PEAK+")";
+  }catch(ex){ TRACE_MEM=false; return ""; }   // one failure disables sampling for the whole run
+}
+function trace(msg){
+  if(!TRACE_PATH) return;
+  try{
+    var secs=Math.round((new Date().getTime()-TRACE_T0)/100)/10;
+    var line=secs+" | "+traceMemMb()+" | "+msg;
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var f=fso.OpenTextFile(TRACE_PATH,8,true); f.WriteLine(line); f.Close();
+  }catch(e){}
+}
 var TOC_BAD=0, TOC_BADSAMPLE=[], TOC_CLASH=0, TOC_CLASHSAMPLE=[];   // malicious-member rejections (per index)
 var SELF_SHA=null;         // lazy SHA-256 of this .hta (certutil), for run provenance
 var WRAPD=0;               // outer-wrapper unwrap depth this run (max 1 unwrap: outer -> nested bundle)
@@ -1020,7 +1081,12 @@ function analyze(){
   var outdir=trimStr($("outDir").value); if(!outdir){ syncOutDir(); outdir=trimStr($("outDir").value); }
   LASTOUTDIR=outdir; EXDIR=outdir+"\\_extracted"; NODEDIR=outdir+"\\_nodecfg"; ensureDir(outdir);
   resetHostGlobals();                     // ONE reset list, shared with fleet mode - see its comment
-  ANALYZED=false; WRAPD=0; FLEET_TRACE_PATH="";   // a stale fleet trace must not absorb this run's stage lines
+  ANALYZED=false; WRAPD=0;
+  /* single runs get their OWN trace file. v1.17.5 merely CLEARED the fleet path here, which stopped a
+     stale fleet trace absorbing this run's lines but left single-Analyze with no crash trace at all -
+     precisely the gap that made the "crashed after processing" report undiagnosable. */
+  traceInit("analyze");
+  trace("analyze: input="+inp+" out="+outdir);
   $("anStats").innerHTML=""; $("ovIndic").innerHTML=""; $("ovCve").innerHTML=""; $("anStatus").innerHTML="Logons / Actions / Timeline / Persistence / IOC not parsed yet.";
 
   // folder input?
@@ -1257,14 +1323,15 @@ function wrapCheck(outer, input){
   return true;
 }
 function finishToc(input){
+  trace("finishToc: entry");
   if(wrapCheck(ARCHIVE, input)) return;   // outer wrapper: unwrap to the nested bundle and re-index
-  detectType();
-  buildInventory();
-  extractKeyFilesToc();
-  parseNode();
+  trace("finishToc: detectType"); detectType();
+  trace("finishToc: buildInventory"); buildInventory();
+  trace("finishToc: extractKeyFilesToc"); extractKeyFilesToc();
+  trace("finishToc: parseNode"); parseNode();
   hostMismatchNote();
-  writeRunInfo(LASTOUTDIR, input);
-  showResults();
+  trace("finishToc: writeRunInfo"); writeRunInfo(LASTOUTDIR, input);
+  trace("finishToc: showResults"); showResults();
   setStatus("Indexed "+nf(TOC.length)+" entries - "+typeLabel()+" bundle. Parsing logs…","ok");
   var rid=RUNID; window.setTimeout(function(){ if(rid===RUNID) runAnalysis(); }, 60);
 }
@@ -1273,12 +1340,12 @@ function finishToc(input){
 function runTree(input){
   ROOT=findTreeRoot(input); if(!ROOT){ setStatus("No bundle root (README) found under that folder.","err"); return; }
   PREFIX=baseName(ROOT); TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null;
-  detectTypeTree();
-  buildInventory();     // buildInventory branches on MODE for presence/size
-  parseNode();
+  trace("runTree: detectTypeTree"); detectTypeTree();
+  trace("runTree: buildInventory"); buildInventory();     // buildInventory branches on MODE for presence/size
+  trace("runTree: parseNode"); parseNode();
   hostMismatchNote();
-  writeRunInfo(LASTOUTDIR, input);
-  showResults();
+  trace("runTree: writeRunInfo"); writeRunInfo(LASTOUTDIR, input);
+  trace("runTree: showResults"); showResults();
   setStatus(typeLabel()+" bundle (extracted tree). Parsing logs…","ok");
   var rid=RUNID; window.setTimeout(function(){ if(rid===RUNID) runAnalysis(); }, 60);
 }
@@ -1704,13 +1771,13 @@ function parseVmwareLogs(){
     map[lc(rel)]=v.name; sizes[lc(rel)]=sz; want.push(rel); }
   if(!want.length){ appendLog("  vmware.log: none present for the registered VMs"+(skippedBig?(" ("+skippedBig+" skipped - over "+fmtSize(VMWARELOG_MAXFILE)+")"):"")); return; }
   VMEV_SRC="vmware.log";
-  fleetTrace("    vmware.log: "+want.length+" file(s)"+(MODE==="toc"?" -> extractStripToTemp":""));
+  trace("    vmware.log: "+want.length+" file(s)"+(MODE==="toc"?" -> extractStripToTemp":""));
   var base = (MODE==="toc") ? extractStripToTemp(want) : "";
   var added=0, files=0, budget=VMWARELOG_BUDGET;
   try{
     for(i=0;i<want.length && added<VMWARELOG_TOTAL && budget>0;i++){ rel=want[i];
       var path = (MODE==="tree") ? (ROOT+"\\"+winRel(rel)) : (base+"\\"+winRel(rel));
-      fleetTrace("    vmware.log file "+(i+1)+"/"+want.length+" ("+fmtSize(sizes[lc(rel)])+")");
+      trace("    vmware.log file "+(i+1)+"/"+want.length+" ("+fmtSize(sizes[lc(rel)])+")");
       var txt=""; try{ if(fileExists(path)){ var fsz=sizes[lc(rel)];
         if(fsz<=VMWARELOG_SMALL){ txt=readUtf8(path); budget-=fsz; }
         else { txt=readCappedText(path,VMWARELOG_HEAD)+"\n"+readTailText(path,VMWARELOG_TAIL); budget-=(VMWARELOG_HEAD+VMWARELOG_TAIL); } } }catch(e){}
@@ -3324,29 +3391,42 @@ function runAnalysis(){
   if(BUSY){ setStatus("Busy - wait for the current run.","err"); return; }
   BUSY=true; $("anBtn").disabled=true; LOG_TRUNC=[]; ANALYSIS_ERRS=[]; logCacheClear(); VPXD_LINES=null;
   appendLog("=== log analysis: "+typeLabel()+" bundle, mode="+MODE+" ===");
+  trace("runAnalysis: "+typeLabel()+" mode="+MODE);
   $("anStatus").innerHTML="Parsing logs (decompressing on demand)…"; setStatus("Parsing logs…","muted");
+  /* traced + GC'd stage wrapper, matching fleet's fstep. Single-Analyze previously had NO gcNow() at
+     all: the theory was that its setTimeout chunks let the collector run on its own, but that is an
+     assumption, not a measurement, and it costs nothing to stop relying on it. */
+  function astep(name, fn){ trace("stage "+name); safeStep(name, fn); gcNow(); }
   window.setTimeout(function(){
-    safeStep("maint", parseMaint); safeStep("logons", parseLogons); safeStep("bruteforce", bfApply); $("anStatus").innerHTML="Parsed logons ("+nf(LOGON.length)+")… actions…";
+    astep("maint", parseMaint); astep("logons", parseLogons); astep("bruteforce", bfApply); $("anStatus").innerHTML="Parsed logons ("+nf(LOGON.length)+")… actions…";
     window.setTimeout(function(){ try{
-      safeStep("actions", parseActions); safeStep("timeline", buildTimeline); safeStep("ioc", sweepIocs);
-      safeStep("ransom", ransomScan);   // must precede indicators: srcState() asks it whether a missing log was encrypted
-      safeStep("indicators", buildIndicators); safeStep("cves", buildCves); safeStep("persistence", buildPersistence);
-      safeStep("network", parseNetwork); safeStep("sessions", finalizeSessions);
-      safeStep("users", parseUsersV); safeStep("persist-accounts", buildPersistAccounts);   // after sessions: rows carry the envoy-joined IPs
-      safeStep("security", buildSecurity);
-      safeStep("vms", parseVms); safeStep("vmevents", parseVmEvents);
-      safeStep("spec", buildSpec);   // after parseVms: the vCenter cluster-node table reads VCSA_VM_META (v1.16.0)
-      ANALYZED=true; paintTabs();
-      safeStep("nvd", nvdStart);   // async: paints from cve.json now, repaints when NVD answers (or explains why it could not)
-      writeAnalysisOutputs(); amendRunInfo();
+      astep("actions", parseActions); astep("timeline", buildTimeline); astep("ioc", sweepIocs);
+      astep("ransom", ransomScan);   // must precede indicators: srcState() asks it whether a missing log was encrypted
+      astep("indicators", buildIndicators); astep("cves", buildCves); astep("persistence", buildPersistence);
+      astep("network", parseNetwork); astep("sessions", finalizeSessions);
+      astep("users", parseUsersV); astep("persist-accounts", buildPersistAccounts);   // after sessions: rows carry the envoy-joined IPs
+      astep("security", buildSecurity);
+      astep("vms", parseVms); astep("vmevents", parseVmEvents);
+      astep("spec", buildSpec);   // after parseVms: the vCenter cluster-node table reads VCSA_VM_META (v1.16.0)
+      /* ---- everything below is the RENDER TAIL. It sits OUTSIDE safeStep, so a fault here never
+         reaches ANALYSIS_ERRS / runinfo's parserFailures - which is exactly why a "crashed after
+         processing" report was undiagnosable: every artifact said the run succeeded. Traced step by
+         step so the last line names the function. ---- */
+      trace("tail: paintTabs"); ANALYZED=true; paintTabs();
+      astep("nvd", nvdStart);   // async: paints from cve.json now, repaints when NVD answers (or explains why it could not)
+      trace("tail: writeAnalysisOutputs"); writeAnalysisOutputs();
+      trace("tail: amendRunInfo"); amendRunInfo();
       var msg=nf(LOGON.length)+" logons, "+nf(ACTIONS.length)+" actions, "+nf(TIMELINE.length)+" timeline, "+nf(IOCHITS.length)+" IOC hits.";
       var warn=ANALYSIS_ERRS.length?("  ("+ANALYSIS_ERRS.length+" stage(s) failed: "+ANALYSIS_ERRS.join(", ")+" - see Show log)"):"";
       $("anStatus").innerHTML=msg+warn+(LOG_TRUNC.length?("  (capped: "+LOG_TRUNC.join("; ")+")"):"");
-      setStatus((ANALYSIS_ERRS.length?"Log analysis finished with "+ANALYSIS_ERRS.length+" partial failure(s) - ":"Log analysis complete - ")+msg, ANALYSIS_ERRS.length?"err":"ok"); renderAnStats();
+      setStatus((ANALYSIS_ERRS.length?"Log analysis finished with "+ANALYSIS_ERRS.length+" partial failure(s) - ":"Log analysis complete - ")+msg, ANALYSIS_ERRS.length?"err":"ok");
+      trace("tail: renderAnStats"); renderAnStats();
       BUSY=false; $("anBtn").disabled=false;
+      trace("tail: render TAB="+TAB);
       if(TAB==="overview") renderOverview(); else if(TAB!=="inv") render();   // Overview depends on analysis output (stats / maintenance / CVE) - it must repaint too
-      logCacheClear(); VPXD_LINES=null;   // every consumer has run - release the cached line sets (can be 100+ MB)
-    }catch(e2){ BUSY=false; $("anBtn").disabled=false; setStatus("Analysis phase failed: "+e2.message,"err"); } }, 30);
+      trace("tail: release caches"); logCacheClear(); VPXD_LINES=null; gcNow();   // every consumer has run - release the cached line sets (can be 100+ MB)
+      trace("runAnalysis: COMPLETE");
+    }catch(e2){ BUSY=false; $("anBtn").disabled=false; trace("runAnalysis: THREW "+(e2&&e2.message?e2.message:e2)); setStatus("Analysis phase failed: "+e2.message,"err"); } }, 30);
   }, 30);
 }
 /* A case-window change alters what bfAnalyze() sees - it filters on inWin() precisely so "the
@@ -5094,9 +5174,9 @@ var VCSA_VM_META=null;
 function parseVms(){ VMS=[]; VCSA_VM_META=null;
   if(BTYPE==="vcsa"){ try{ parseVcsaVms(); }catch(e){ appendLog("  VMs (vCenter) parse error: "+e.message); } return; }
   if(BTYPE!=="esxi") return;
-  fleetTrace("    parseVms: findVmxRels");
+  trace("    parseVms: findVmxRels");
   var rels=findVmxRels(); appendLog("  VMs: "+nf(rels.length)+" .vmx in bundle");
-  fleetTrace("    parseVms: "+rels.length+" vmx; runningVms");
+  trace("    parseVms: "+rels.length+" vmx; runningVms");
   var run=runningVms(), got=0;
   if(rels.length){
     var base = (MODE==="toc") ? extractStripToTemp(rels) : "";
@@ -5113,7 +5193,7 @@ function parseVms(){ VMS=[]; VCSA_VM_META=null;
     }
   }
   /* ransomware fallback: VM folders whose .vmx is missing or renamed + renamed sibling files */
-  fleetTrace("    parseVms: scanEsxiEncFolders (walks vmfs tree)");
+  trace("    parseVms: scanEsxiEncFolders (walks vmfs tree)");
   try{ var extra=scanEsxiEncFolders(rels), e2;
     var partialByDir={};
     for(e2=0;e2<extra.length;e2++){ if(extra[e2].partial) partialByDir[lc(extra[e2].dir)]=extra[e2]; }
@@ -5123,9 +5203,9 @@ function parseVms(){ VMS=[]; VCSA_VM_META=null;
     for(e2=0;e2<extra.length;e2++){ if(!extra[e2].partial){ VMS.push(extra[e2]); nEnc++; } }
     if(nEnc) appendLog("  VMs: +"+nf(nEnc)+" folder(s) with missing/renamed .vmx - POSSIBLY ENCRYPTED");
   }catch(eE){ appendLog("  VMs enc-scan error: "+eE.message); }
-  fleetTrace("    parseVms: attachVmdkExtents");
+  trace("    parseVms: attachVmdkExtents");
   try{ attachVmdkExtents(); }catch(eX){ appendLog("  VMs extent parse error: "+eX.message); }
-  fleetTrace("    parseVms: done");
+  trace("    parseVms: done");
   VMS.sort(function(a,b){ var ea=a.enc?0:1, eb=b.enc?0:1; if(ea!==eb) return ea-eb;
     if(a.running!==b.running) return a.running?-1:1; return a.name<b.name?-1:(a.name>b.name?1:0); });
 }
@@ -6037,6 +6117,7 @@ function securityExport(){
   catch(e){ setStatus("Security export failed: "+e.message,"err"); appendLog("Security export error: "+e.message); }
 }
 function makeReport(){
+  trace("makeReport: start");
   if(!BTYPE){ setStatus("Analyze a bundle first.","err"); return; }
   if(!ANALYZED){ setStatus("Log analysis has not finished yet.","err"); return; }
   try{ var path=LASTOUTDIR+"\\report_"+nowStamp()+".html"; writeUtf8(path, buildReportHtml());
@@ -6129,28 +6210,28 @@ function readTocSync(archive){
 function resetHostGlobals(){ TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFIX=""; BTYPE=""; NODE={}; INVENTORY=[]; LOGON=[]; SESSIONS=[]; BF=null; RANSOM=null; MAINT=[]; MAINT_TOTAL=0; VMEV=[]; VMEV_SRC=""; VMEV_TOTAL=0; VPXD_HUMANS=[]; VM_MOREF_NAME={}; ACTIONS=[]; TIMELINE=[]; IOCHITS=[]; IOC_SWEEPCAP=""; INDIC=[]; CVES=[]; PERSIST=[]; SPEC=[]; VMS=[]; VCSA_VM_META=null; SECPOST=[]; VIBS=[]; VIBS_NOTABLE=[]; VOBD_STATS=null; ESXUP_EVENTS=[]; NETINFO=null; LOG_TRUNC=[]; VPXD_LINES=null; VPXD_SRCNOTE=""; USERSV=[]; PAM_FINDS=null; ANALYSIS_ERRS=[]; logCacheClear(); }
 function processHostSync(path){
   var tp="h"+FLEET_I+" "+baseName(path);
-  fleetTrace(tp+" | ENTER processHostSync");
-  var d=resolveBundleDesc(path); if(!d){ fleetTrace(tp+" | resolveBundleDesc -> null (skip)"); return null; }
+  trace(tp+" | ENTER processHostSync");
+  var d=resolveBundleDesc(path); if(!d){ trace(tp+" | resolveBundleDesc -> null (skip)"); return null; }
   resetHostGlobals(); MODE=d.mode; ARCHIVE=d.archive||""; ROOT=d.root||"";
   var host=sanitHost(d.host||baseName(path)); if(!host) host="host"+FLEET_I;
   LASTOUTDIR=fleetBase()+"\\"+host; EXDIR=LASTOUTDIR+"\\_extracted"; NODEDIR=LASTOUTDIR+"\\_nodecfg"; ensureDir(LASTOUTDIR);
-  fleetTrace(tp+" | mode="+MODE+" host="+host+" -> bindSourceCache");
+  trace(tp+" | mode="+MODE+" host="+host+" -> bindSourceCache");
   bindSourceCache(LASTOUTDIR, (MODE==="tree")?ROOT:ARCHIVE, MODE);   // two same-short-name hosts sharing this folder can no longer feed each other stale extractions
   var sig=snapSig(path, ARCHIVE, MODE);
   if(FLEET_REUSE){ var cached=loadSnapshot(LASTOUTDIR, sig);
-    if(cached){ fleetTrace(tp+" | reused cached snapshot"); appendLog("  = "+host+" reused saved analysis from "+(cached.analyzedAt||"?")+" (source unchanged, skipped re-parse)"); return cached; } }
+    if(cached){ trace(tp+" | reused cached snapshot"); appendLog("  = "+host+" reused saved analysis from "+(cached.analyzedAt||"?")+" (source unchanged, skipped re-parse)"); return cached; } }
   $("hostName").value=host;
-  fleetTrace(tp+" | detectType");
+  trace(tp+" | detectType");
   if(MODE==="toc"){ if(!readTocSync(ARCHIVE)) return null; detectType(); }
   else { PREFIX=baseName(ROOT); detectTypeTree(); }
-  if(!BTYPE){ fleetTrace(tp+" | no BTYPE (skip)"); return null; }                    // wrapper / not a real bundle -> skip
-  fleetTrace(tp+" | buildInventory");   buildInventory();
-  fleetTrace(tp+" | extractKeyFilesToc"); extractKeyFilesToc();
-  fleetTrace(tp+" | parseNode"); parseNode(); gcNow();   // one up-front archive pass per host (extractKeyFilesToc no-ops in tree mode / on re-runs)
+  if(!BTYPE){ trace(tp+" | no BTYPE (skip)"); return null; }                    // wrapper / not a real bundle -> skip
+  trace(tp+" | buildInventory");   buildInventory();
+  trace(tp+" | extractKeyFilesToc"); extractKeyFilesToc();
+  trace(tp+" | parseNode"); parseNode(); gcNow();   // one up-front archive pass per host (extractKeyFilesToc no-ops in tree mode / on re-runs)
   ANALYSIS_ERRS=[];   // per-host fault isolation: one bad log on one host doesn't abort the whole fleet run
   /* fleet runs the whole per-host analysis synchronously, so force a GC after each stage - without
      it, transient parse garbage accumulates across the block and OOMs a constrained mshta (v1.17.3). */
-  function fstep(name, fn){ fleetTrace(tp+" | stage "+name); safeStep(name, fn); gcNow(); }
+  function fstep(name, fn){ trace(tp+" | stage "+name); safeStep(name, fn); gcNow(); }
   fstep("maint", parseMaint); fstep("logons", parseLogons); fstep("bruteforce", bfApply); fstep("actions", parseActions); fstep("timeline", buildTimeline); fstep("ioc", sweepIocs);
   fstep("ransom", ransomScan);   // must precede indicators: srcState() asks it whether a missing log was encrypted
   fstep("indicators", buildIndicators); fstep("cves", buildCves); fstep("persistence", buildPersistence); fstep("network", parseNetwork);
@@ -6158,12 +6239,12 @@ function processHostSync(path){
   fstep("security", buildSecurity); fstep("vms", parseVms); fstep("vmevents", parseVmEvents); fstep("spec", buildSpec);
   if(ANALYSIS_ERRS.length) appendLog("  = "+host+": "+ANALYSIS_ERRS.length+" stage(s) failed ("+ANALYSIS_ERRS.join(", ")+")");
   var dispHost=betterHost(host, NODE.host);   // roster shows the real FQDN parsed from bundle content, not the wrapper label
-  fleetTrace(tp+" | writeRunInfo + snapshotHost");
+  trace(tp+" | writeRunInfo + snapshotHost");
   try{ writeRunInfo(LASTOUTDIR, path); writeAnalysisOutputs(); }catch(e){}
   var snap=snapshotHost(dispHost, path);
   try{ saveSnapshot(LASTOUTDIR, sig, snap); }catch(e){}
   logCacheClear(); VPXD_LINES=null; gcNow();   // snapshotHost (collectOpTasks/collectManagedHosts) was the last consumer - free before the next host
-  fleetTrace(tp+" | DONE (snapshot saved)");
+  trace(tp+" | DONE (snapshot saved)");
   return snap;
 }
 function distinct(arr){ var m={},o=[]; for(var i=0;i<arr.length;i++){ var k=lc(arr[i]); if(k&&!m["#"+k]){ m["#"+k]=1; o.push(arr[i]); } } return o; }
@@ -6262,8 +6343,8 @@ function triageFleet(){
   appendLog("=== FLEET discovery under "+root+" ==="+(FLEET_REUSE?" (reuse cached analysis where source unchanged)":" (forced fresh re-analysis)"));
   setStatus("Fleet: scanning "+root+" for bundles…","muted");
   FLEET=[]; FLEET_HOSTS={}; FLEET_I=0;
-  ensureDir(fleetBase()); fleetTraceInit();   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
-  fleetTrace("triageFleet start; root="+root);
+  ensureDir(fleetBase()); traceInit("fleet");   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
+  trace("triageFleet start; root="+root);
   try{ FLEET_CANDS=discoverBundles(root); }
   catch(eDisc){ FLEET_CANDS=[]; setStatus("Fleet discovery failed while scanning "+root+": "+(eDisc&&eDisc.message?eDisc.message:eDisc)+" - try pointing at the folder that directly holds the bundles.","err"); appendLog("Fleet discovery error: "+(eDisc&&eDisc.message?eDisc.message:eDisc)); return; }
   if(!FLEET_CANDS.length){ setStatus("No bundle archives or extracted bundle folders found under that folder.","err"); return; }
@@ -6535,6 +6616,7 @@ function paintTabs(){
   }
 }
 function setTab(t){
+  trace("setTab "+t);
   TAB=t;
   showEl("detailCard",false); $("detBody").innerHTML="";   // close any open preview when switching tabs
   paintTabs();
