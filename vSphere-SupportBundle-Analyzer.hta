@@ -475,7 +475,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.6";
+var APP_VERSION = "1.17.7";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -563,16 +563,29 @@ function gcNow(){ try{ if(typeof CollectGarbage!=="undefined") CollectGarbage();
        _Processed\_fleet\_analyze-trace.txt   single runs  (new)
    Each line carries elapsed seconds and the process working set, so a crash report answers "where"
    AND "was memory climbing" without anyone having to argue about it afterwards. */
-var TRACE_PATH="", TRACE_T0=0;
+var TRACE_PATH="", TRACE_T0=0, TRACE_RUN=0, TRACE_MAXBYTES=2*1024*1024;
+/* v1.17.7: APPEND across the session instead of truncating per run.
+   v1.17.6 re-created the file on every Analyze, so analysing bundle A then bundle B left only B's
+   trace. That is precisely backwards for the open question: the suspected failure follows a HEAVY
+   vCenter run with a second bundle after it, so the first run's history is the part that matters.
+   The process is what accumulates, so the trace must span the process. A run header separates them,
+   and the file is only rotated when it grows past TRACE_MAXBYTES. */
 function traceInit(kind){
   try{
     var b=fleetBase(); if(!b){ TRACE_PATH=""; return; }
     ensureDir(b);
-    TRACE_PATH=b+"\\_"+kind+"-trace.txt"; TRACE_T0=new Date().getTime();
-    WMI_PID=-1; TRACE_MEM=true; TRACE_MEM_LAST=0; TRACE_MEM_PEAK=0;   // fresh sampling state per run
-    var fso=new ActiveXObject("Scripting.FileSystemObject"); var f=fso.CreateTextFile(TRACE_PATH,true,false);
-    f.WriteLine("# "+kind+" trace - app v"+APP_VERSION+" - if the app closed, the LAST line is the stage that crashed");
-    f.WriteLine("# format:  <elapsed s> | <mshta working set MB> | <stage>    (blank MB = WMI unavailable)");
+    TRACE_PATH=b+"\\_"+kind+"-trace.txt"; TRACE_T0=new Date().getTime(); TRACE_RUN++;
+    WMI_PID=-1; TRACE_MEM=true; TRACE_MEM_LAST=0; TRACE_MEM_PEAK=0; TRACE_MEM_WHY="";   // fresh sampling state per run
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var fresh=true;
+    try{ if(fso.FileExists(TRACE_PATH) && fso.GetFile(TRACE_PATH).Size<=TRACE_MAXBYTES) fresh=false; }catch(eS){}
+    var f=fresh ? fso.CreateTextFile(TRACE_PATH,true,false) : fso.OpenTextFile(TRACE_PATH,8,true);
+    if(fresh){
+      f.WriteLine("# "+kind+" trace - app v"+APP_VERSION+" - if the app closed, the LAST line is the stage that crashed");
+      f.WriteLine("# format:  <elapsed s> | <working set MB (peak)> | <stage>   (blank MB = throttled; 'mem OFF: ...' = why sampling stopped)");
+      f.WriteLine("# runs APPEND within a session - the process is what accumulates, so earlier runs are kept.");
+    }
+    f.WriteLine(""); f.WriteLine("===== run "+TRACE_RUN+" ("+kind+") "+isoNowUtc()+" - app v"+APP_VERSION+" =====");
     f.Close();
   }catch(e){ TRACE_PATH=""; }
 }
@@ -587,19 +600,34 @@ function traceInit(kind){
    "where". Lines between samples simply leave the column blank, and the last sample before a crash
    is at most that far stale. Any failure disables sampling outright - the tracer exists to diagnose
    crashes and must never cause one, or slow the app down hunting a number it cannot get. */
-var WMI_SVC=null, WMI_PID=-1, TRACE_MEM=true, TRACE_MEM_LAST=0, TRACE_MEM_EVERY=5000, TRACE_MEM_PEAK=0;
+var WMI_SVC=null, WMI_PID=-1, TRACE_MEM=true, TRACE_MEM_LAST=0, TRACE_MEM_EVERY=5000, TRACE_MEM_PEAK=0, TRACE_MEM_WHY="";
+/* v1.17.7: resolve this mshta's PID, and RECORD WHY if it cannot.
+   v1.17.6 shipped this with a silent failure mode and it produced a completely empty memory column on
+   the very first real run - the same `catch(e){}` sin this release cycle criticised elsewhere. An
+   instrument that fails quietly is worse than no instrument: it looks like data was collected.
+   The mechanism itself is sound (verified in JScript under cscript: GetObject binds, the query
+   returns CommandLine, the direct Handle bind returns WorkingSetSize), so the failure is specific to
+   the HTA host - and note killBatTree is the only other WMI user here and only runs after a 40-minute
+   tar timeout, so WMI has probably never once succeeded in this app. Hence: three fallbacks, and the
+   reason is written into the trace either way. */
 function selfPidWmi(){
   if(WMI_PID>=0) return WMI_PID;
   WMI_PID=0;
   try{
     if(!WMI_SVC) WMI_SVC=GetObject("winmgmts:{impersonationLevel=impersonate}!\\\\.\\root\\cimv2");
-    var want=lc(SELF_HTA);
+  }catch(ex){ TRACE_MEM_WHY="GetObject(winmgmts) failed: "+(ex&&ex.message?ex.message:ex); return 0; }
+  var want=lc(SELF_HTA), seen=0, only=0;
+  try{
     var procs=WMI_SVC.ExecQuery("SELECT ProcessId,CommandLine FROM Win32_Process WHERE Name='mshta.exe'");
     var e=new Enumerator(procs);
-    for(; !e.atEnd(); e.moveNext()){ var p=e.item();
-      if(lc(String(p.CommandLine||"")).indexOf(want)>=0){ WMI_PID=p.ProcessId; break; } }
-  }catch(ex){ WMI_PID=0; }
-  return WMI_PID;
+    for(; !e.atEnd(); e.moveNext()){ var p=e.item(); seen++; only=p.ProcessId;
+      var cl=""; try{ cl=lc(String(p.CommandLine||"")); }catch(ec){}   // CommandLine can be restricted
+      if(cl && cl.indexOf(want)>=0){ WMI_PID=p.ProcessId; return WMI_PID; } }
+  }catch(ex2){ TRACE_MEM_WHY="Win32_Process query failed: "+(ex2&&ex2.message?ex2.message:ex2); return 0; }
+  /* fallback: exactly one mshta running - it is necessarily us */
+  if(seen===1){ WMI_PID=only; TRACE_MEM_WHY="matched by sole mshta instance (CommandLine unreadable or did not contain "+SELF_HTA+")"; return WMI_PID; }
+  TRACE_MEM_WHY = seen ? (seen+" mshta processes and none whose CommandLine contains "+SELF_HTA) : "no mshta.exe process found by WMI";
+  return 0;
 }
 function traceMemMb(){
   if(!TRACE_MEM) return "";
@@ -607,12 +635,13 @@ function traceMemMb(){
   if(TRACE_MEM_LAST && (now-TRACE_MEM_LAST)<TRACE_MEM_EVERY) return "";   // throttled - blank column
   TRACE_MEM_LAST=now;
   try{
-    var pid=selfPidWmi(); if(!pid){ TRACE_MEM=false; return ""; }
+    var pid=selfPidWmi();
+    if(!pid){ TRACE_MEM=false; return "mem OFF: "+(TRACE_MEM_WHY||"pid not resolved"); }
     var p=WMI_SVC.Get("Win32_Process.Handle='"+pid+"'");
     var mb=Math.round(p.WorkingSetSize/1048576);
     if(mb>TRACE_MEM_PEAK) TRACE_MEM_PEAK=mb;
     return mb+" MB (peak "+TRACE_MEM_PEAK+")";
-  }catch(ex){ TRACE_MEM=false; return ""; }   // one failure disables sampling for the whole run
+  }catch(ex){ TRACE_MEM=false; return "mem OFF: WorkingSetSize read failed: "+(ex&&ex.message?ex.message:ex); }
 }
 function trace(msg){
   if(!TRACE_PATH) return;
@@ -6120,9 +6149,19 @@ function makeReport(){
   trace("makeReport: start");
   if(!BTYPE){ setStatus("Analyze a bundle first.","err"); return; }
   if(!ANALYZED){ setStatus("Log analysis has not finished yet.","err"); return; }
-  try{ var path=LASTOUTDIR+"\\report_"+nowStamp()+".html"; writeUtf8(path, buildReportHtml());
-    setStatus("Report written → "+path,"ok"); appendLog("Report: "+path); launchFile(path);
-  }catch(e){ setStatus("Report failed: "+e.message,"err"); }
+  /* traced to COMPLETION: v1.17.6 logged only "start", so a trace ending there was ambiguous - it
+     could mean the report crashed the app, or simply that the report was the last thing done before
+     the window was closed normally. buildReportHtml is the heaviest single allocation in the app
+     (the whole case as one string), so which of those it is actually matters. */
+  try{ var path=LASTOUTDIR+"\\report_"+nowStamp()+".html";
+    trace("makeReport: buildReportHtml");
+    var html=buildReportHtml();
+    trace("makeReport: writing "+Math.round(html.length/1024)+" KB");
+    writeUtf8(path, html);
+    setStatus("Report written → "+path,"ok"); appendLog("Report: "+path);
+    trace("makeReport: launch"); launchFile(path);
+    trace("makeReport: DONE");
+  }catch(e){ trace("makeReport: THREW "+(e&&e.message?e.message:e)); setStatus("Report failed: "+e.message,"err"); }
 }
 
 /* ============================================================
