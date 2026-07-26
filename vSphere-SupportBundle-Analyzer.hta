@@ -68,14 +68,19 @@
   #apppill{cursor:default}
   .wrap{padding:12px 14px}
   .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:12px}
-  /* Heading ladder (was inverted: the pane title was 11px, SMALLER than the 12px headings inside it).
-   pane title 14px  >  heading inside a pane 11px (.panel h4 / a section <h3> in the card body)  >
-   table column header 10px (th). ".card > h3" = the card's OWN title (direct child); a nested <h3>
-   rendered into a body div (e.g. "Top findings" in #secBody) is NOT a direct child and stays 11px.
-   v1.16.0: section headings follow the UAC Analyzer convention - 11px UPPERCASE, letter-spaced,
-   BRIGHT (#e6edf3) with any inline description staying muted/lowercase via its own span. */
+  /* Heading ladder. v1.16.0 fixed an INVERTED ladder (pane title 11px, SMALLER than the 12px headings
+   inside it) by lifting the card's own title to 14px. v1.17.16 flattens the top two rungs at Ben's
+   request: a card title and the section headings inside it are now the SAME 11px, so "Security
+   posture" reads level with "CVE exposure" / "Patch state" / "Hardening controls" rather than
+   towering over them. Applied to EVERY card, not just Security - one tab's title rendering smaller
+   than the rest would be a worse inconsistency than the one being fixed.
+   What still separates the rungs is weight and colour, not size: a card title keeps margin 0 0 10px
+   and sits alone above its panels, while `th` stays 10px. So the ladder is now
+     card title 11px  =  section heading 11px (.panel h4)  >  table column header 10px (th).
+   Section headings follow the UAC Analyzer convention - 11px UPPERCASE, letter-spaced, BRIGHT
+   (#e6edf3) with any inline description staying muted/lowercase via its own span. */
 .card h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#e6edf3}
-.card > h3{font-size:14px;margin:0 0 10px}
+.card > h3{font-size:11px;margin:0 0 10px}
   label.fld{display:block;margin:6px 0 2px;font-size:11px;color:#8b949e}
   input.txt,select,textarea{background:#1c2330;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:5px 8px;font-size:13px;font-family:Consolas,monospace}
   input.wide{width:62%}
@@ -133,6 +138,16 @@
      so IOC / CRITICAL / BREACH / UID0 (the strongest findings) rendered muted. ioc = brightest red. */
   .tag.ioc{background:#4a1418;color:#ff5c5c;border:1px solid #d13030;font-weight:700}
   .tag.info{background:#161b22;color:#8b949e;border:1px solid #30363d}
+  /* per-cluster identity colours (v1.17.14). Every cluster chip used one blue, so on a multi-cluster
+     roster you had to READ the letter to see where a host belonged. These are identity-only, carry no
+     severity, and deliberately avoid the reds - red means finding here, never "cluster C". A vCenter
+     tied to a cluster gets that cluster's colour, so the whole group reads as one block. */
+  .tag.clu0{background:#10233a;color:#79c0ff;border:1px solid #1f6feb}   /* blue   */
+  .tag.clu1{background:#0f2a1a;color:#7ee787;border:1px solid #2ea043}   /* green  */
+  .tag.clu2{background:#241033;color:#c297ff;border:1px solid #6a3aa0}   /* purple */
+  .tag.clu3{background:#2a2410;color:#e3b341;border:1px solid #8a7a2a}   /* amber  */
+  .tag.clu4{background:#0c2b2b;color:#5ad4d4;border:1px solid #2a8a8a}   /* teal   */
+  .tag.clu5{background:#33102a;color:#ff9ad4;border:1px solid #a03a80}   /* pink   */
   .hl-ioc{color:#ff6b6b;font-weight:600}
   tr.hl-ioc td{color:#ff8b8b}
   .pgood{color:#3fb950;font-weight:600}.pmiss{color:#8b949e}.pkey{color:#e3b341;font-weight:700}
@@ -320,14 +335,14 @@
           <span class="muted" id="vmEvInfo" style="margin-left:10px;font-size:12px"></span>
           <span style="float:right">
             <span class="muted" style="font-size:11px;margin-right:4px" title="Show only these kinds of event. All are on by default - untick to narrow.">Type:</span>
-            <label class="evf" title="VM created, cloned, or registered into inventory."><input type="checkbox" class="vmEvK" value="create" checked> create</label>
-            <label class="evf" title="VM destroyed (deleted from disk) or unregistered from inventory. The ransomware-relevant one."><input type="checkbox" class="vmEvK" value="delete" checked> delete</label>
-            <label class="evf" title="VM reconfigured (hardware/settings), renamed, or its template state changed."><input type="checkbox" class="vmEvK" value="modify" checked> modify</label>
-            <label class="evf" title="VM powered on."><input type="checkbox" class="vmEvK" value="start" checked> start</label>
-            <label class="evf" title="VM powered off, suspended, or a guest shutdown/standby was requested. A burst of these before an encryption window is the classic tell."><input type="checkbox" class="vmEvK" value="stop" checked> stop</label>
-            <label class="evf" title="VM reset (hard reboot) or a guest reboot was requested."><input type="checkbox" class="vmEvK" value="reboot" checked> reboot</label>
-            <label class="evf" title="Snapshot created, removed, consolidated, or reverted. Snapshot removal destroys restore points - review against any encryption window."><input type="checkbox" class="vmEvK" value="snapshot" checked> snapshot</label>
-            <label class="evf" title="VM migrated / relocated (vMotion or Storage vMotion), including DRS-initiated moves."><input type="checkbox" class="vmEvK" value="migrate" checked> migrate</label>
+            <label class="evf" title="Create - the VM was created, cloned, or registered into inventory."><input type="checkbox" class="vmEvK" value="create" checked> Create</label>
+            <label class="evf" title="Delete - the VM was destroyed (deleted from disk) or unregistered from inventory. The ransomware-relevant one."><input type="checkbox" class="vmEvK" value="delete" checked> Delete</label>
+            <label class="evf" title="Modify - the VM was reconfigured (hardware/settings), renamed, or its template state changed."><input type="checkbox" class="vmEvK" value="modify" checked> Modify</label>
+            <label class="evf" title="Start - the VM was powered on."><input type="checkbox" class="vmEvK" value="start" checked> Start</label>
+            <label class="evf" title="Stop - the VM was powered off or suspended, or a guest shutdown/standby was requested. A burst of these before an encryption window is the classic tell."><input type="checkbox" class="vmEvK" value="stop" checked> Stop</label>
+            <label class="evf" title="Reboot - the VM was reset (hard reboot) or a guest reboot was requested."><input type="checkbox" class="vmEvK" value="reboot" checked> Reboot</label>
+            <label class="evf" title="Snapshot - a snapshot was created, removed, consolidated, or reverted. Snapshot removal destroys restore points - review against any encryption window."><input type="checkbox" class="vmEvK" value="snapshot" checked> Snapshot</label>
+            <label class="evf" title="Migrate - the VM was migrated / relocated (vMotion or Storage vMotion), including DRS-initiated moves."><input type="checkbox" class="vmEvK" value="migrate" checked> Migrate</label>
             <input class="txt" id="vmEvQ" placeholder="filter events" style="width:150px;margin-left:6px">
             <button class="btn green" id="vmEvExport" title="Export the VM events exactly as filtered here to CSV.">Export &rarr; CSV</button>
           </span>
@@ -481,7 +496,11 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.13";
+/* Every release that adds a SNAPSHOT FIELD must bump this. loadSnapshot only rejects on a version
+   MISMATCH, so a cached snapshot written by the previous build is reused verbatim - and one missing
+   the new field then silently disables whatever reads it. 1.17.15 added hostMoRef / managedMorefs;
+   1.17.16 adds vcServerIp / mgmtIp, which scope the MoRef join to the right vCenter. */
+var APP_VERSION = "1.17.23";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -551,6 +570,10 @@ function logCacheCost(sz, nLines){ return (sz*2)+((nLines||0)*40); }
    vmsyslog.conf / rsyslog.conf by both buildPersistence and buildSecurity). Each miss was a
    fileExists + full readUtf8. Bounded by count and by per-entry size; cleared with the log cache. */
 var MEMCACHE={}, MEMCACHE_N=0, MEMCACHE_MAX=64, MEMCACHE_MAXLEN=1048576;
+/* decompression quota (v1.17.21). Generous by design - the reference vCenter legitimately expands to
+   ~271 MB - so these bound the pathological case, not real captures. */
+var VIEW_BYTES=0, VIEW_BUDGET=3*1024*1024*1024, VIEW_MEMBER_MAX=2*1024*1024*1024,
+    VIEW_MAX_RATIO=200, VIEW_RATIO_FLOOR=256*1024*1024, VIEW_QUOTA_HIT=false;
 function logCacheClear(){ LOGCACHE={}; LOGCACHE_BYTES=0; MEMCACHE={}; MEMCACHE_N=0; }
 /* force a full GC (Trident/JScript CollectGarbage). During a long SYNCHRONOUS block - which is exactly
    how fleet mode processes each host - the collector rarely runs on its own, so transient allocations
@@ -599,6 +622,8 @@ function procTick(){ if(!PROC_T0) return; var el=$("procTimer"); if(!el) return;
   el.innerHTML=PROC_WHAT+" "+procFmt(Math.floor(((new Date()).getTime()-PROC_T0)/1000)); }
 function procStop(ok){
   if(PROC_TIMER){ window.clearInterval(PROC_TIMER); PROC_TIMER=null; }
+  try{ appendLogFlush(); }catch(eF){}   // a run must never end with lines still sitting in the buffer
+  try{ releaseOutputLock(); }catch(eL){}   // single finalisation point, so no exit path leaves it held
   if(!PROC_T0) return;
   var s=Math.floor(((new Date()).getTime()-PROC_T0)/1000), el=$("procTimer");
   if(el){ el.className=(ok===false?"pill err":"pill ok"); el.innerHTML="Scan time "+procFmt(s); }
@@ -622,8 +647,16 @@ function traceInit(kind){
     try{ if(fso.FileExists(TRACE_PATH) && fso.GetFile(TRACE_PATH).Size<=TRACE_MAXBYTES) fresh=false; }catch(eS){}
     var f=fresh ? fso.CreateTextFile(TRACE_PATH,true,false) : fso.OpenTextFile(TRACE_PATH,8,true);
     if(fresh){
-      f.WriteLine("# "+kind+" trace - app v"+APP_VERSION+" - if the app closed, the LAST line is the stage that crashed");
-      f.WriteLine("# format:  <elapsed s> | <working set MB (peak)> | <stage>   (blank MB = throttled; 'mem OFF: ...' = why sampling stopped)");
+      /* v1.17.21 (P7): the version was stamped here ONLY, i.e. on the run that CREATED the file - so
+         after an upgrade the banner sat above dozens of runs from later builds claiming an old
+         version. The per-run "===== run N =====" line below carries the real version; this header no
+         longer claims one. */
+      f.WriteLine("# "+kind+" trace - if the app closed, the LAST line is the stage that crashed.");
+      f.WriteLine("# The app version is on each '===== run N =====' banner below, NOT here: this file");
+      f.WriteLine("# is appended to across upgrades, so one version in the header would be wrong for most of it.");
+      f.WriteLine("# format:  <elapsed s> | <working-set MB (peak)> | <stage>   (blank MB = throttled; 'mem OFF: ...' = why sampling stopped)");
+      f.WriteLine("# 'ws' = process WORKING SET. Windows does not shrink it when memory is freed, so a high");
+      f.WriteLine("# resting value between runs is allocator behaviour, not a leak. Watch the PEAK within a run.");
       f.WriteLine("# runs APPEND within a session - the process is what accumulates, so earlier runs are kept.");
     }
     f.WriteLine(""); f.WriteLine("===== run "+TRACE_RUN+" ("+kind+") "+isoNowUtc()+" - app v"+APP_VERSION
@@ -694,7 +727,11 @@ function traceMemMb(){
     var p=WMI_SVC.Get("Win32_Process.Handle='"+pid+"'");
     var mb=Math.round(p.WorkingSetSize/1048576);
     if(mb>TRACE_MEM_PEAK) TRACE_MEM_PEAK=mb;
-    return mb+" MB (peak "+TRACE_MEM_PEAK+")";
+    /* v1.17.21 (P8): labelled "ws" for WORKING SET. Windows does not shrink a process working set
+       because objects were freed, so this number does NOT fall when memory is released - reading a
+       high value between runs as a leak is a mistake that has already been made once. The figure to
+       watch is the PEAK within a run; the resting value is allocator behaviour, not retention. */
+    return mb+" MB ws (peak "+TRACE_MEM_PEAK+")";
   }catch(ex){ TRACE_MEM=false; return "mem OFF: WorkingSetSize read failed: "+(ex&&ex.message?ex.message:ex); }
 }
 function trace(msg){
@@ -706,7 +743,17 @@ function trace(msg){
     var f=fso.OpenTextFile(TRACE_PATH,8,true); f.WriteLine(line); f.Close();
   }catch(e){}
 }
-var TOC_BAD=0, TOC_BADSAMPLE=[], TOC_CLASH=0, TOC_CLASHSAMPLE=[];   // malicious-member rejections (per index)
+var TOC_BAD=0, TOC_BADSAMPLE=[], TOC_CLASH=0, TOC_CLASHSAMPLE=[], TOC_PREFIX_BAD="";   // malicious-member rejections (per index)
+/* "" = the archive index is complete; otherwise WHY it is not. Every "artifact absent" verdict in the
+   run is unsound while this is set, so it rides into runinfo, the status line and the fleet roster. */
+var TOC_PARTIAL="";
+function tocPartialReport(n){
+  appendLog("INCOMPLETE ARCHIVE INDEX: "+TOC_PARTIAL+".\n"
+    +"  Only "+n+" member(s) could be listed. Members past the damage are NOT in the index, so every\n"
+    +"  'artifact absent' result below means 'not indexed', NOT 'not collected'. Re-copy the bundle\n"
+    +"  from source and re-run before reporting anything from it. The index is not being cached.");
+  setStatus("INCOMPLETE BUNDLE - "+TOC_PARTIAL+". Findings are based on a PARTIAL index; absent artifacts may simply be unreadable. Re-copy the bundle and re-run.","err");
+}
 var SELF_SHA=null;         // lazy SHA-256 of this .hta (certutil), for run provenance
 var WRAPD=0;               // outer-wrapper unwrap depth this run (max 1 unwrap: outer -> nested bundle)
 
@@ -716,8 +763,31 @@ function esc(s){ if(s==null) return ""; s=String(s);
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function nf(n){ n=String(n); var r="",c=0; for(var k=n.length-1;k>=0;k--){ r=n.charAt(k)+r; c++; if(c%3===0&&k>0) r=","+r; } return r; }
 function setStatus(msg,cls){ var el=$("status"); el.innerHTML=esc(msg); el.className=cls||"muted"; }
-function appendLog(t){ var el=$("log"); if(el.getAttribute("data-ph")==="1"){ el.innerHTML=""; el.setAttribute("data-ph","0"); }
-  el.style.display="block"; el.innerHTML+=esc(t)+"\n"; el.scrollTop=el.scrollHeight; }
+/* v1.17.17: `innerHTML +=` re-serialised and re-parsed the ENTIRE log element on every line, so cost
+   grew with the square of the number of lines - and a fleet run emits thousands. Lines are buffered
+   and flushed on a timer instead. The flush still writes escaped text (the escaping is what stops a
+   hostile archive member name becoming markup), and appendLogFlush() is called before anything that
+   reads the log or ends the run, so nothing is ever lost to a pending timer. */
+var LOGBUF=[], LOGTMR=null, LOGLINES=0, LOG_MAXLINES=20000;
+function appendLogFlush(){
+  if(LOGTMR){ try{ window.clearTimeout(LOGTMR); }catch(e){} LOGTMR=null; }
+  if(!LOGBUF.length) return;
+  var el=$("log"); if(!el){ LOGBUF=[]; return; }
+  if(el.getAttribute("data-ph")==="1"){ el.innerHTML=""; el.setAttribute("data-ph","0"); }
+  el.style.display="block";
+  /* one append per flush, not one per line */
+  el.innerHTML+=LOGBUF.join("");
+  LOGBUF=[];
+  try{ el.scrollTop=el.scrollHeight; }catch(e2){}
+}
+function appendLog(t){
+  /* a runaway loop must not be able to grow the DOM without bound */
+  if(LOGLINES>LOG_MAXLINES){ if(LOGLINES===LOG_MAXLINES+1){ LOGBUF.push(esc("… on-screen log capped at "+nf(LOG_MAXLINES)+" lines; the trace file and runinfo.json remain complete.")+"\n"); LOGLINES++; appendLogFlush(); } return; }
+  LOGLINES++;
+  LOGBUF.push(esc(t)+"\n");
+  if(LOGBUF.length>=40){ appendLogFlush(); return; }
+  if(!LOGTMR){ try{ LOGTMR=window.setTimeout(appendLogFlush, 120); }catch(e){ appendLogFlush(); } }
+}
 function trimStr(s){ return String(s).replace(/^\s+|\s+$/g,""); }
 function baseName(p){ if(!p) return ""; p=String(p); var i=Math.max(p.lastIndexOf("\\"),p.lastIndexOf("/")); return i>=0?p.substring(i+1):p; }
 function showEl(id,vis){ var e=$(id); if(!e) return; var c=e.className.replace(/\s*\bhide\b/g,""); e.className = vis ? c : (c+" hide"); }
@@ -747,8 +817,46 @@ function leI32(b,o){ return (b[o]|(b[o+1]<<8)|(b[o+2]<<16)|(b[o+3]<<24)); }
 function leU32(b,o){ return leI32(b,o)>>>0; }
 function cStr(b,o,len){ var s=""; for(var i=0;i<len;i++){ var c=b[o+i]; if(c===0) break; if(c>=32) s+=String.fromCharCode(c); } return s; }
 /* a wtmp/btmp ut_host is an IP for remote sessions, a tty string for local ones */
-function ipOfHost(h){ h=trimStr(h||""); return (/^\d{1,3}(\.\d{1,3}){3}$/.test(h) || (h.indexOf(":")>=0 && /^[0-9a-f:]+$/i.test(h))) ? h : ""; }
+/* ---- endpoint parsing (v1.17.17, VS-007) -------------------------------------------------------
+   IPv6 was a blind spot. ipOfHost() demanded [0-9a-f:] only, so an IPv4-MAPPED address (::ffff:10.0.0.1)
+   was rejected for containing dots, and the sshd regexes captured ([\d.]+), so an SSH login from an
+   IPv6 client did not merely mis-classify - the line failed to match and the LOGON WAS DROPPED. An
+   authentication that never appears is worse than one shown with a wrong label.
+   IP_TOKEN is deliberately permissive about shape and strict about context: it is used where the log
+   has already said "from <endpoint>", so it must accept v4, v6, mapped v6, bracketed and zone-id
+   forms rather than validate them. */
+var IP_TOKEN="(\\[[0-9A-Fa-f:.%]+\\]|[0-9A-Fa-f:.%]+)";
+/* strip [] and any %zone, so the same client is one identity however the log wrote it */
+function normIp(s){ s=trimStr(String(s||"")); s=s.replace(/^\[|\]$/g,""); var z=s.indexOf("%"); if(z>0) s=s.substring(0,z);
+  return s.replace(/^::ffff:(?=\d{1,3}(\.\d{1,3}){3}$)/i,""); }   // ::ffff:10.0.0.1 IS 10.0.0.1 - one host, one row
+function isIpV4(h){ return /^\d{1,3}(\.\d{1,3}){3}$/.test(h); }
+function isIpV6(h){ return h.indexOf(":")>=0 && /^[0-9A-Fa-f:]+(\.\d{1,3}){0,3}$/.test(h) && !/:::/.test(h); }
+function ipOfHost(h){ h=normIp(h); return (isIpV4(h)||isIpV6(h)) ? h : ""; }
+/* sshd auth lines, built from IP_TOKEN so v4/v6/mapped/bracketed all match the SAME way in both the
+   auth.log and the wtmp-corroboration passes (they had two separate copies of each pattern). */
+var RE_SSH_OK =new RegExp("Accepted\\s+\\S+\\s+for\\s+(\\S+)\\s+from\\s+"+IP_TOKEN);
+var RE_SSH_BAD=new RegExp("Failed\\s+password\\s+for\\s+(?:invalid user\\s+)?(\\S+)\\s+from\\s+"+IP_TOKEN);
 
+/* v1.17.17 (VS-012): this was CALLED at startup to raise the network-path warning banner and was
+   never defined anywhere - a ReferenceError swallowed by the surrounding empty catch, so the banner
+   could never appear. That matters more than a dead call looks: running from a UNC/OneDrive/redirected
+   path is exactly what forces the ANSI IO fallback that truncates large logs, and the warning is how
+   the operator learns their reads are being capped. UNC and drive-letter forms are both checked -
+   a mapped network drive (Z:) is a network path even though it looks local. */
+function isNetworkPath(p){
+  p=String(p||""); if(!p) return false;
+  if(/^\\\\/.test(p)) return true;                                  // \\server\share
+  if(/^(onedrive|\\\\)/i.test(p)) return true;
+  if(/[\\\/](OneDrive|Dropbox|Google ?Drive|Box)([\\\/]|$)/i.test(p)) return true;   // sync-root redirection
+  var m=p.match(/^([A-Za-z]):/); if(!m) return false;
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+    var d=fso.GetDrive(m[1]+":");
+    /* Scripting.Drive.DriveType: 3 = Remote. IsReady guards a disconnected mapping. */
+    if(Number(d.DriveType)===3) return true;
+    try{ if(d.ShareName && String(d.ShareName).length) return true; }catch(e1){}
+  }catch(e){}
+  return false;
+}
 /* ---------- file IO via ActiveX (UTF-8 safe, network-zone fallback) - family ---------- */
 var FILE_IO="adodb";
 function zoneNote(){ appendLog("NOTE: a network / OneDrive / redirected location was detected - Windows zone policy blocks the fast UTF-8 reader, so the app fell back to slower ANSI file IO (large logs are read only partially, and long reads can trigger a 'stop running this script?' prompt - just click No). Triage still works. For full speed & fidelity, copy the app AND the bundle to a LOCAL drive (C:\\) and re-run.");
@@ -773,7 +881,13 @@ function writeUtf8(path,text){
   var f=fso.CreateTextFile(path,true,false); f.Write(text); f.Close();
 }
 function uid(){ return new Date().getTime()+""+Math.floor(Math.random()*100000); }
-function batEsc(s){ return String(s).replace(/%/g,"%%"); }
+/* Make a string safe to sit inside a "quoted" argument in a generated .bat.
+   '%' -> '%%' stops batch variable expansion. The double quote is REMOVED, not escaped, because
+   cmd.exe has no in-quote escape for it: a surviving quote closes the argument and everything after
+   it runs as a command (v1.17.17). tocRelBad()/tocPrefixBad() reject quoted names before they ever
+   get here, so this strip is the second line of defence and should never fire on real input - if it
+   does, tar simply fails to find the member, which is fail-closed and visible in the log. */
+function batEsc(s){ return String(s).replace(/%/g,"%%").replace(/"/g,""); }
 
 /* ---------- run a batch, blocking / async (family) ---------- */
 function runBat(lines, show){
@@ -847,6 +961,11 @@ function htaFolder(){
 }
 function fileMtime(p){ try{ return String(new ActiveXObject("Scripting.FileSystemObject").GetFile(p).DateLastModified); }catch(e){ return ""; } }
 function deleteTree(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(fso.FolderExists(p)) fso.DeleteFolder(p,true); return true; }catch(e){ return false; } }
+/* true = the file is gone (or was never there). Its own function so a caller that must FAIL CLOSED
+   gets one honest boolean per artifact, instead of one try/catch spanning several deletions where a
+   single failure is indistinguishable from all of them failing (v1.17.17). */
+function deleteFileIfExists(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
+  if(fso.FileExists(p)) fso.DeleteFile(p,true); return true; }catch(e){ return false; } }
 
 /* ---------- source-cache binding (v1.15.0) ----------
    _extracted / _view / _nodecfg / toc.tsv are keyed by OUTPUT FOLDER (i.e. by hostname). Before this,
@@ -855,29 +974,141 @@ function deleteTree(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObje
    files. source.json binds the cache to the source identity (canonical path + size + last-write); a
    mismatch wipes the derived caches before anything can read them. Fingerprint is identity-grade, not
    content-grade (no full SHA-256 of a multi-GB archive per run) - size+mtime changes on any re-capture. */
+/* ---- content fingerprint for an EXTRACTED TREE (v1.17.17, VS-001/VS-008) -----------------------
+   Both cache layers used to identify a tree by its README's size+mtime alone, and the fleet snapshot
+   signature recorded NOTHING at all for a tree (snapSig only stats an archive). Editing, adding or
+   deleting any file in an extracted bundle - which is exactly what happens when someone "just checks
+   something" in a copy of the evidence - left every cache and every saved analysis looking valid, so
+   the tool would happily serve findings for a tree that no longer existed in that form.
+   This walks the tree and folds file COUNT, TOTAL BYTES and the NEWEST mtime into one string. It is
+   not a hash - it does not need to be. It has to notice ordinary modification, and any edit changes
+   at least the mtime, while add/delete changes the count. Bounded so a pathological tree cannot hang
+   the run; if the walk hits its budget the fingerprint says so and reuse is refused rather than
+   guessed at, because a fingerprint that silently covers only part of a tree is worse than none. */
+var TREESIG_MAXNODES=40000;
+/* processHostSync calls bindSourceCache() and then snapSig() back to back on the SAME root, so the
+   walk ran twice per tree-mode host - measured at 0.3-3.2 s each on the reference fleet, i.e. the
+   whole cost of this check paid twice for nothing. Memoised per root, cleared per host by
+   resetHostGlobals so a second bundle can never inherit the first one's fingerprint (v1.17.17). */
+var TREESIG_CACHE=null, TREESIG_CACHE_KEY="";
+function treeFingerprint(root){
+  var ckey=lc(String(root||""));
+  if(TREESIG_CACHE && TREESIG_CACHE_KEY===ckey) return TREESIG_CACHE;
+  var n=0, bytes=0, newest="", capped=false, dirs=0;
+  var fso; try{ fso=new ActiveXObject("Scripting.FileSystemObject"); }catch(e){ return {sig:"", capped:true}; }
+  function walk(dir, depth){
+    if(capped || depth>12) return;
+    var fo; try{ fo=fso.GetFolder(dir); }catch(e1){ return; }
+    /* directories count against the budget too: a tree of a million EMPTY folders would otherwise
+       walk forever while the file counter never moved (the review flagged this class app-wide). */
+    if((++dirs + n) > TREESIG_MAXNODES){ capped=true; return; }
+    try{ var e=new Enumerator(fo.Files); for(; !e.atEnd(); e.moveNext()){
+      if((++n + dirs) > TREESIG_MAXNODES){ capped=true; return; }
+      var f=e.item(); try{ bytes+=Number(f.Size)||0; var m=String(f.DateLastModified); if(m>newest) newest=m; }catch(e2){} } }catch(e3){}
+    try{ var s=new Enumerator(fo.SubFolders); for(; !s.atEnd(); s.moveNext()){
+      var sub=s.item(); if(isReparsePoint(sub)) continue;      // never follow junctions - loop/fault guard
+      walk(sub.Path+"", depth+1); if(capped) return; } }catch(e4){}
+  }
+  walk(String(root), 0);
+  var res = capped ? {sig:"", capped:true} : {sig:n+"f/"+dirs+"d/"+bytes+"b/"+newest, capped:false};
+  TREESIG_CACHE_KEY=ckey; TREESIG_CACHE=res;
+  return res;
+}
 function sourceSigOf(src, mode){
-  var sz=-1, mt="";
+  var sz=-1, mt="", tsig="", tcap=false;
   try{ if(mode!=="tree" && fileExists(src)){ sz=fileSize(src); mt=fileMtime(src); }
-       else if(mode==="tree"){ var rd=src+"\\README"; if(fileExists(rd)){ sz=fileSize(rd); mt=fileMtime(rd); } } }catch(e){}
-  return { src:lc(String(src||"")), size:sz, mtime:mt, mode:String(mode||"") };
+       else if(mode==="tree"){ var rd=src+"\\README"; if(fileExists(rd)){ sz=fileSize(rd); mt=fileMtime(rd); }
+         var tf=treeFingerprint(src); tsig=tf.sig; tcap=tf.capped; } }catch(e){}
+  return { src:lc(String(src||"")), size:sz, mtime:mt, mode:String(mode||""), tree:tsig, treeCapped:!!tcap };
 }
 function sourceManifestPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\source.json"; }
+/* ---- per-output-folder lock (v1.17.21, P5) ------------------------------------------------------
+   SINGLEINSTANCE="no" is deliberate - an analyst wants two bundles open side by side - but nothing
+   stopped two instances pointing at the SAME _Processed\<host> folder. Both would extract into
+   _extracted, both would write toc.tsv / runinfo.json / snapshot.json, and the loser's evidence would
+   be silently interleaved with the winner's. That is the same cross-capture contamination
+   bindSourceCache exists to prevent, arriving by a different door.
+   A lock file carries the owning PID and a heartbeat timestamp. A lock whose process is gone, or
+   whose heartbeat is stale, is reclaimed - a crashed run must not wedge the folder forever. */
+var LOCK_STALE_MS=15*60*1000, LOCK_HELD="";
+function lockPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\.run.lock"; }
+/* Use wmiSvc(), NEVER GetObject(): this HTA runs under x-ua-compatible IE=edge, where GetObject is
+   undefined - the mistake that left killBatTree dead for several releases, and which the test suite
+   catches. wmiSvc() is the one connect path in the app. */
+function pidAlive(pid){
+  var n=parseInt(pid,10)||0; if(!n) return false;
+  try{ wmiSvc();
+    var e=new Enumerator(WMI_SVC.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId="+n));
+    return !e.atEnd();
+  }catch(ex){ return true; }   // cannot tell -> assume alive, i.e. respect the lock (fail closed)
+}
+function acquireOutputLock(outdir){
+  try{
+    ensureDir(outdir);
+    var p=lockPath(outdir), me=selfPidWmi()||0, now=(new Date()).getTime();
+    if(fileExists(p)){
+      var old=null; try{ old=JSON.parse(readUtf8(p)); }catch(e0){}
+      if(old && String(old.pid)!==String(me)){
+        var age=now-(Number(old.stamp)||0);
+        if(pidAlive(old.pid) && age<LOCK_STALE_MS){
+          appendLog("OUTPUT FOLDER IN USE: "+outdir+"\n  held by process "+old.pid+" since "+(old.iso||"?")+". Two runs writing one output folder interleave their evidence, so this run is stopping.");
+          setStatus("That output folder is in use by another instance (pid "+old.pid+"). Close it, or set a different Output directory, then re-run.","err");
+          return false;
+        }
+        appendLog("Reclaiming a stale lock on "+outdir+" (pid "+old.pid+(pidAlive(old.pid)?", heartbeat "+Math.round(age/60000)+" min old":" is gone")+") - the previous run did not finish cleanly.");
+      }
+    }
+    writeUtf8(p, JSON.stringify({pid:me, stamp:now, iso:isoNowUtc(), app:APP_VERSION},null,1));
+    LOCK_HELD=p; return true;
+  }catch(e){ appendLog("Output lock could not be taken ("+e.message+") - continuing, but do not run a second instance against this folder."); return true; }
+}
+function touchOutputLock(){
+  if(!LOCK_HELD) return;
+  try{ writeUtf8(LOCK_HELD, JSON.stringify({pid:selfPidWmi()||0, stamp:(new Date()).getTime(), iso:isoNowUtc(), app:APP_VERSION},null,1)); }catch(e){}
+}
+function releaseOutputLock(){ if(!LOCK_HELD) return; try{ deleteFileIfExists(LOCK_HELD); }catch(e){} LOCK_HELD=""; }
+/* Returns TRUE only when the caches in `outdir` are safe to reuse for `src`.
+   v1.17.17 (VS-008): this used to FAIL OPEN in three separate ways - deleteTree() results were
+   ignored, the catch wrote no manifest but still let the run continue, and the return value meant
+   "there was no previous manifest" rather than "validation succeeded", so the two callers that
+   ignored it could not have used it anyway. Any of those left stale extractions from a DIFFERENT
+   capture sitting in the folder while the run treated them as this bundle's evidence.
+   Now: if the old content cannot be proven gone, the manifest is NOT written and false is returned -
+   the caller isolates or aborts. Cross-capture contamination is the one failure this tool cannot be
+   allowed to have, so uncertainty must resolve to "unsafe". */
 function bindSourceCache(outdir, src, mode){
   try{
     var sig=sourceSigOf(src, mode), p=sourceManifestPath(outdir), old=null;
     try{ if(fileExists(p)) old=JSON.parse(readUtf8(p)); }catch(e0){}
-    if(old && old.src===sig.src && old.size===sig.size && old.mtime===sig.mtime && old.mode===sig.mode) return true;   // same source - caches valid
+    /* a tree we could not fully fingerprint is never "the same source" - we simply do not know */
+    if(sig.treeCapped){
+      appendLog("SOURCE CACHE: the extracted tree is too large to fingerprint within the "+nf(TREESIG_MAXNODES)+"-node budget, so it cannot be proven unchanged. Caches will be rebuilt for this run.");
+      old=null; }
+    if(old && old.src===sig.src && old.size===sig.size && old.mtime===sig.mtime
+           && old.mode===sig.mode && String(old.tree||"")===String(sig.tree||"")) return true;   // same source - caches valid
     if(old){
-      appendLog("SOURCE CHANGED for this output folder - cached extractions belong to a different capture and are being discarded:\n  cached: "+old.src+" | "+old.size+" | "+old.mtime+"\n  current: "+sig.src+" | "+sig.size+" | "+sig.mtime);
-      var od=String(outdir).replace(/[\\\/]+$/,"");
-      deleteTree(od+"\\_extracted"); deleteTree(od+"\\_view"); deleteTree(od+"\\_nodecfg"); deleteTree(od+"\\_inner");
-      try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
-        if(fso.FileExists(od+"\\toc.tsv")) fso.DeleteFile(od+"\\toc.tsv");
-        if(fso.FileExists(od+"\\inner.json")) fso.DeleteFile(od+"\\inner.json"); }catch(e1){}
+      appendLog("SOURCE CHANGED for this output folder - cached extractions belong to a different capture and are being discarded:"
+        +"\n  cached:  "+old.src+" | "+old.size+" | "+old.mtime+(old.tree?(" | "+old.tree):"")
+        +"\n  current: "+sig.src+" | "+sig.size+" | "+sig.mtime+(sig.tree?(" | "+sig.tree):""));
+      var od=String(outdir).replace(/[\\\/]+$/,""), failed=[];
+      if(!deleteTree(od+"\\_extracted")) failed.push("_extracted");
+      if(!deleteTree(od+"\\_view"))      failed.push("_view");
+      if(!deleteTree(od+"\\_nodecfg"))   failed.push("_nodecfg");
+      if(!deleteTree(od+"\\_inner"))     failed.push("_inner");
+      if(!deleteFileIfExists(od+"\\toc.tsv"))    failed.push("toc.tsv");
+      if(!deleteFileIfExists(od+"\\inner.json")) failed.push("inner.json");
+      if(failed.length){
+        /* FAIL CLOSED. Writing the manifest here would bless another capture's files as this one's. */
+        appendLog("SOURCE CACHE VALIDATION FAILED - could not remove stale content from a DIFFERENT capture: "+failed.join(", ")
+          +". The manifest was NOT updated. Close anything holding those files (Explorer, an editor, AV) or point the output directory somewhere clean, then re-run.");
+        setStatus("Cache validation FAILED - stale extractions from a different capture could not be removed ("+failed.join(", ")+"). Refusing to reuse this output folder; choose a clean output directory and re-run.","err");
+        return false; }
     }
     writeUtf8(p, JSON.stringify(sig,null,1));
-    return !old;
-  }catch(e){ appendLog("source-cache binding failed ("+e.message+") - caches NOT validated this run."); return false; }
+    return true;                                    // validated: caches now belong to THIS source
+  }catch(e){ appendLog("source-cache binding FAILED ("+e.message+") - caches could NOT be validated, so they must not be reused this run.");
+    setStatus("Cache validation failed ("+e.message+") - refusing to reuse cached extractions. Re-run, or point the output directory at a clean folder.","err");
+    return false; }
 }
 
 /* ---------- tar.exe (extraction engine) ---------- */
@@ -933,6 +1164,15 @@ function ensureZstd(){
     "Expand-Archive -Path $zip -DestinationPath $ex -Force",
     "$exe=Get-ChildItem -Path $ex -Recurse -Filter 'zstd.exe' | Select-Object -First 1",
     "if(-not $exe){ throw 'zstd.exe not found inside the downloaded zip' }",
+    /* v1.17.21 (P6): zstd.exe IS a PE binary, so unlike the .hta it can carry an Authenticode
+       signature - check it, and record the hash either way. A forensic workstation should not run an
+       unverified executable it just fetched; if the release is unsigned the operator is told so and
+       decides, rather than the app deciding silently on their behalf. */
+    "$sig=Get-AuthenticodeSignature -LiteralPath $exe.FullName",
+    "$zh=(Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLower()",
+    "Write-Output ('ZSTD_SHA256:'+$zh)",
+    "Write-Output ('ZSTD_SIG:'+$sig.Status+'|'+$(if($sig.SignerCertificate){$sig.SignerCertificate.Subject}else{'unsigned'}))",
+    "if($sig.Status -ne 'Valid' -and -not $env:VSB_ZSTD_ALLOW_UNSIGNED){ throw ('downloaded zstd.exe is not validly signed (status: '+$sig.Status+') - refusing to install it. Install zstd.exe into tools\\ by hand if you have verified it yourself.') }",
     "Copy-Item $exe.FullName (Join-Path '"+tdq+"' 'zstd.exe') -Force",
     "Remove-Item $zip,$ex -Recurse -Force -ErrorAction SilentlyContinue",
     "Write-Output 'ZSTD_OK'"
@@ -940,8 +1180,16 @@ function ensureZstd(){
   try{ var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close(); }catch(ew){ setStatus("zstd download stage failed: "+ew.message,"err"); return false; }
   var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -File "'+ps1+'" > "__LOG__" 2>&1'], false);
   try{ fso.DeleteFile(ps1); }catch(e0){}
-  if((r.log+"").indexOf("ZSTD_OK")>=0 && resolveZstd()){ checkZstd(); setStatus("zstd.exe installed in tools\\.","ok"); return true; }
-  appendLog("--- zstd download ---\n"+r.log); setStatus("Could not install zstd.exe - see log. Install it manually into tools\\.","err"); return false;
+  if((r.log+"").indexOf("ZSTD_OK")>=0 && resolveZstd()){ checkZstd();
+    var zh=((r.log+"").match(/ZSTD_SHA256:([0-9a-f]{64})/i)||[])[1]||"";
+    var zs=((r.log+"").match(/ZSTD_SIG:(.+)/)||[])[1]||"";
+    appendLog("zstd.exe installed in tools\\"+(zs?("\n  Authenticode: "+trimStr(zs)):"")+(zh?("\n  SHA-256: "+zh):""));
+    setStatus("zstd.exe installed in tools\\ (Authenticode verified - see log for the signer and SHA-256).","ok"); return true; }
+  appendLog("--- zstd download ---\n"+r.log);
+  setStatus(/not validly signed/i.test(r.log+"")
+    ? "REFUSED to install zstd.exe - the downloaded binary is not validly signed. Install a zstd.exe you have verified yourself into tools\\."
+    : "Could not install zstd.exe - see log. Install it manually into tools\\.","err");
+  return false;
 }
 
 /* ---------- target hostname + _Processed convention (family) ---------- */
@@ -951,12 +1199,23 @@ function sanitHost(s){ return String(s).replace(/[^A-Za-z0-9._\-]/g,"-").replace
    Bundle folder / archive name carries the host - peel the timestamp tail. */
 function guessHost(p){
   p=String(p||""); var b=baseName(p).replace(/\.(tar\.gz|tgz|tar|zip)$/i,"");
-  // esx-<prefix>-<fqdn>-YYYY-MM-DD--HH.MM-<digits>
-  var me=b.match(/^esx-[^-]+-(.+?)-\d{4}-\d{2}-\d{2}--/i); if(me) return me[1];
+  /* esx-<fqdn>-YYYY-MM-DD--HH.MM-<digits>
+     v1.17.15: this was `^esx-[^-]+-(.+?)-`, written as if vm-support inserted a prefix segment before
+     the host name. It does not - the name is just `esx-` + the host + the timestamp. That `[^-]+-` ate
+     the host's FIRST hyphen-separated label, so every hyphenated host name lost its head:
+       esx-<lbl>-<rest>.<domain>-<date>--…   ->   "<rest>.<domain>"   ("<lbl>" silently dropped)
+     Hyphenated ESXi host names are the norm, not the exception, so this mis-parsed most real bundles.
+     It hid on the roster because betterHost() later recovered the real name from esx.conf, but the
+     _fleet OUTPUT FOLDERS were named from this and carried the truncation. */
+  var me=b.match(/^esx-(.+?)-\d{4}-\d{2}-\d{2}--/i); if(me) return me[1];
   // vc-<fqdn>-YYYY-MM-DD--HH.MM-<digits>
   var mv=b.match(/^vc-(.+?)-\d{4}-\d{2}-\d{2}--/i); if(mv) return mv[1];
   // <name>-vcsa-support-log-bundle-XXXX
   var mb=b.match(/^(.+?)-vcsa-support-log-bundle/i); if(mb) return mb[1];
+  /* <fqdn>-vcsupport<stamp> / -vmsupport<stamp> - the VAMI / vSphere-UI naming, which carries no
+     "vc-" prefix and no "--" date separator, so every pattern above missed it and the whole archive
+     filename became the host (v1.17.14). */
+  var mu=b.match(/^(.+?)-(?:vc|vm|esx)-?support[\d@._\-]*$/i); if(mu) return mu[1];
   var mp=p.match(/[\\\/]_Processed[\\\/]([^\\\/]+)[\\\/]/i); if(mp) return mp[1];
   return "";
 }
@@ -1028,6 +1287,20 @@ function amendRunInfo(){
     if(!ent) return;
     ent.analysisFinishedUtc=isoNowUtc();
     ent.logsTruncated=LOG_TRUNC.slice(0);
+    /* v1.17.17: an incomplete archive index invalidates every "artifact absent" conclusion in this
+       run, so it belongs in the run's own provenance record, not only on a status line that scrolls. */
+    ent.indexPartial=TOC_PARTIAL||"";
+    /* v1.17.21 (P4): an ARCHIVE can be proven complete (extractor exit code + stderr). An extracted
+       TREE cannot - there is no manifest to check it against, and a tree unpacked from a damaged
+       archive looks exactly like a whole one. Silence would equate the two, so say which this was.
+       This is a disclosure, not a detector: no heuristic is invented for "this tree looks short". */
+    ent.indexVerified = (MODE==="tree")
+      ? "not verifiable - extracted tree (no archive manifest to check against; a tree unpacked from a truncated archive is indistinguishable from a complete one)"
+      : (TOC_PARTIAL ? ("NO - "+TOC_PARTIAL) : "yes - extractor completed cleanly and the full member list was indexed");
+    /* v1.17.18: which oversized files had their head read as ANSI rather than UTF-8 to stay inside
+       the memory cap. Affects only non-ASCII characters, but it is a fidelity caveat on quoted
+       evidence, so it is recorded rather than assumed harmless. */
+    ent.headReadsAnsi=CAPPED_ANSI ? {count:CAPPED_ANSI, files:CAPPED_ANSI_FILES.slice(0)} : null;
     ent.parserFailures=ANALYSIS_ERRS.slice(0);
     ent.vpxdSet=VPXD_SRCNOTE||"";
     writeUtf8(RUNINFO_LAST.path, JSON.stringify(arr,null,2));
@@ -1191,17 +1464,24 @@ function analyze(){
   traceInit("analyze"); procStart("Scanning");
   trace("analyze: input="+inp+" out="+outdir);
   $("anStats").innerHTML=""; $("ovIndic").innerHTML=""; $("ovCve").innerHTML=""; $("anStatus").innerHTML="Logons / Actions / Timeline / Persistence / IOC not parsed yet.";
+  releaseResultDom();
+  /* v1.17.21 (P5): claim the output folder before anything writes to it. Two instances sharing one
+     _Processed\<host> would interleave extractions, toc.tsv, runinfo and snapshots. */
+  if(!acquireOutputLock(outdir)){ procStop(false); return; }
 
   // folder input?
   if(folderExists(inp)){
     var root=findTreeRoot(inp);
     if(root){ MODE="tree"; ROOT=root; ARCHIVE=""; PREFIX=baseName(root);
-      bindSourceCache(outdir, root, "tree");
+      /* v1.17.17 (VS-008): cache validation FAILS CLOSED. bindSourceCache has already told the operator
+         what to fix; continuing would analyse another capture's extracted files under this bundle's
+         name, which is the one contamination this tool must never produce. */
+      if(!bindSourceCache(outdir, root, "tree")){ procStop(false); return; }
       setStatus("Reading extracted tree…","muted"); window.setTimeout(function(){ runTree(inp); }, 40); return; }
     var innerA=findInnerArchive(inp);
     if(innerA){ MODE="toc"; ARCHIVE=innerA;
       appendLog("Using nested archive found in folder: "+innerA);
-      bindSourceCache(outdir, innerA, "toc");
+      if(!bindSourceCache(outdir, innerA, "toc")){ procStop(false); return; }
       setStatus("Reading bundle index…","muted"); window.setTimeout(function(){ readToc(innerA, inp); }, 40); return; }
     setStatus("That folder is neither an extracted bundle (no README) nor does it contain a bundle archive.","err"); return;
   }
@@ -1213,9 +1493,9 @@ function analyze(){
   var wi=loadInnerManifest(inp);
   if(wi){ MODE="toc"; ARCHIVE=wi;
     appendLog("Outer wrapper recognised from a previous run - using its nested bundle directly: "+wi);
-    bindSourceCache(outdir, inp, "toc"); WRAPD=1;   // cache identity stays the OUTER archive (what the user pointed at)
+    if(!bindSourceCache(outdir, inp, "toc")){ procStop(false); return; } WRAPD=1;   // cache identity stays the OUTER archive (what the user pointed at)
     setStatus("Reading bundle index…","muted"); window.setTimeout(function(){ readToc(wi, inp); }, 40); return; }
-  bindSourceCache(outdir, inp, "toc");
+  if(!bindSourceCache(outdir, inp, "toc")){ procStop(false); return; }
   var fmt=sniffContainer(inp);
   if(fmt==="iso9660"){ var lbl=isoVolumeLabel(inp);
     appendLog("Magic-byte sniff: ISO 9660 CD-ROM image"+(lbl?(" (volume label '"+lbl+"')"):"")+" - NOT a vm-support/vc-support bundle.");
@@ -1228,14 +1508,36 @@ function analyze(){
 
 /* ---- TOC mode: read bundle index with bsdtar -tvf (cached to toc.tsv) ---- */
 function tocCachePath(){ return LASTOUTDIR+"\\toc.tsv"; }
+/* ---- did the extractor actually succeed? (v1.17.17, VS-003) ------------------------------------
+   The index command already appended `echo TAR_EXIT:%errorlevel%` to its log - and NOTHING read it.
+   A truncated archive makes bsdtar list what it can, print "Truncated input file", exit 1, and the
+   app indexed the partial listing, CACHED it, and reported the host as though the bundle were whole.
+   That is not hypothetical: a bundle in the reference set is genuinely short (bsdtar wanted ~1.7 GB
+   and found ~0.4 GB) and had been triaged as complete on every run.
+   Exit code AND stderr are both checked: bsdtar can print a fatal-sounding warning and still exit 0. */
+function tarExitOf(log){ var m=String(log||"").match(/TAR_EXIT:\s*(-?\d+)/i); return m?parseInt(m[1],10):null; }
+var TAR_DAMAGE=/Truncated input file|unexpected end of file|premature|Damaged .*archive|Invalid central directory|corrupt|checksum error|Error exit delayed/i;
+/* "" = the listing is trustworthy; anything else is the reason it is not. */
+function tarIncompleteWhy(rc, log){
+  if(rc!=null && rc!==0){
+    var m=String(log||"").match(/(Truncated input file[^\r\n]*)/i);
+    return "extractor exited "+rc+(m?(" - "+trimStr(m[1])):""); }
+  if(TAR_DAMAGE.test(String(log||""))) return "extractor reported archive damage";
+  return "";
+}
 function tryTocCache(archive){
   try{ var p=tocCachePath(); if(!fileExists(p)){ appendLog("TOC cache: no toc.tsv at "+p+" - full index needed."); return null; }
     var sz=fileSize(archive); var head=readUtf8(p); var nl=head.indexOf("\n"); if(nl<0) return null;
     /* meta line is CRLF-terminated (cacheToc joins with \r\n) - the \s* before $ eats the \r.
        Without it the match always failed and the cache was silently dead (v1.2.3 fix, ported
        from DataDomain-Bundle-Triage v0.11.3). */
-    var meta=head.substring(0,nl); var mm=meta.match(/^#\s*(.+?)\s*\|\s*(\d+)\s*$/);
-    if(!mm){ appendLog("TOC cache: unreadable meta line - re-indexing."); return null; }
+    var meta=head.substring(0,nl); var mm=meta.match(/^#\s*(.+?)\s*\|\s*(\d+)\s*\|\s*complete\s*$/);
+    if(!mm){
+      /* No "complete" token: either an unreadable meta line, or - the reason this token exists - a
+         cache written before v1.17.17, which could have come from a PARTIAL listing. Such a cache is
+         indistinguishable from a good one, so it is not trusted: re-index once and it self-heals. */
+      appendLog("TOC cache: meta line is not marked complete (unreadable, or written before v1.17.17 when partial listings could be cached) - re-indexing.");
+      return null; }
     if(lc(mm[1])!==lc(archive) || String(sz)!==mm[2]){ appendLog("TOC cache: stale (cached "+mm[1]+" | "+mm[2]+", current "+archive+" | "+sz+") - re-indexing."); return null; }
     return head.substring(nl+1);
   }catch(e){ appendLog("TOC cache read failed ("+e.message+") - re-indexing."); return null; }
@@ -1271,6 +1573,11 @@ function readToc(archive, input){
         else if(/Truncated input file|unexpected end of file|premature/i.test(log)) why=" bsdtar hit a truncated/short file - the bundle looks like an incomplete or still-copying download; re-copy it.";
         else if(/CD001|ISO 9660|isolinux|RASRISO/i.test(log)) why=" the archive listing looks like an ISO disc image, not a vm-support/vc-support tree.";
         setStatus("The archive index is empty - is this a support bundle?"+(why||" See log for the bsdtar error."),"err"); return; }
+      /* v1.17.17 (VS-003): the listing is non-empty, but was it COMPLETE? A truncated archive lists
+         what it can and exits non-zero. Members past the truncation point are absent from the index,
+         so every "artifact not present" verdict below is unsound - disclose it and never cache it. */
+      TOC_PARTIAL=tarIncompleteWhy(tarExitOf(log), log);
+      if(TOC_PARTIAL) tocPartialReport(nf(TOC.length));
       cacheToc(archive); finishToc(input);
     }catch(e){ setStatus("Index parse failed: "+e.message,"err"); }
   };
@@ -1287,14 +1594,50 @@ var TOC_RE_GNU=/^\S+\s+\S+\s+(\d+)\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+(.+)$/;
    leading slashes on extraction - this layer rejects such members from the INDEX so no code path (path
    joins, -T extraction lists, winRel mapping) ever handles them, and it catches what bsdtar does not:
    Windows-canonicalisation collisions, where two archive names map onto ONE on-disk file via winRel. */
+/* Windows reserved device names. A member called logs/NUL or logs/CON.txt cannot be written to disk -
+   the write silently goes to the device - so it is an evidence hole that LOOKS like a successful
+   extraction. Matched per path segment, with or without an extension. */
+var WIN_RESERVED=/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
 function tocRelBad(rel){
   if(/[\x00-\x1f]/.test(rel)) return "control character in name";
   if(/^([A-Za-z]:|[\\\/])/.test(rel)) return "absolute / drive-qualified path";
   if(/(^|\/)\.\.(\/|$)/.test(rel)) return "parent-directory (..) traversal";
   if(rel.indexOf("\\")>=0) return "backslash in member name";
+  /* v1.17.17 - COMMAND INJECTION. Member names are passed to tar as arguments inside a generated .bat
+     ("<tar>" -xOf "<archive>" "<PREFIX>/<rel>"), and batEsc() escaped only '%'. Inside a cmd.exe
+     quoted string every other metacharacter (& | < > ^) is literal, so the ONE character that can
+     break out is the double quote - after which the rest of the name runs as commands, in a
+     full-trust HTA, as the analyst. A bundle comes off a possibly-compromised host and an attacker
+     with root on ESXi chooses its file names, so this is reachable. No legitimate member name on any
+     of the reference bundles contains one (0 of 29,498 members). batEsc() strips it too - belt and
+     braces, because this gate is the only thing standing between a file name and a shell. */
+  if(rel.indexOf('"')>=0) return "double quote in member name (command-injection vector)";
+  /* Windows canonicalisation: "foo.log." and "foo.log " both resolve to "foo.log" on disk, so a
+     crafted pair silently overwrites one another AND defeats the winRel() collision detector below,
+     which compares the un-normalised names. Reserved device names are an evidence hole. */
+  var seg=String(rel).split("/");
+  for(var si=0;si<seg.length;si++){ var s=seg[si]; if(!s) continue;
+    if(/[ .]$/.test(s)) return "path segment ends in a dot or space (collides after Windows canonicalisation)";
+    if(WIN_RESERVED.test(s)) return "Windows reserved device name in path"; }
   return "";
 }
-function tocGuardReset(){ TOC_BAD=0; TOC_BADSAMPLE=[]; TOC_CLASH=0; TOC_CLASHSAMPLE=[]; }
+/* PREFIX is the archive's own root directory, taken from the FIRST listing line and then STRIPPED off
+   every member before validation - so nothing validated it, yet it is concatenated straight back on
+   for every extraction argument (PREFIX+"/"+rel). It needs the same gate as a member name, minus the
+   traversal rule, which is meaningless for a single top-level component. */
+function tocPrefixBad(p){
+  p=String(p||"");
+  if(!p) return "empty archive root";
+  if(/[\x00-\x1f]/.test(p)) return "control character in archive root";
+  if(/^([A-Za-z]:|[\\\/])/.test(p)) return "absolute / drive-qualified archive root";
+  if(p.indexOf("\\")>=0) return "backslash in archive root";
+  if(p.indexOf('"')>=0) return "double quote in archive root (command-injection vector)";
+  if(/(^|\/)\.\.(\/|$)/.test(p) || p==="..") return "parent-directory (..) archive root";
+  if(/[ .]$/.test(p)) return "archive root ends in a dot or space";
+  if(WIN_RESERVED.test(p)) return "Windows reserved device name as archive root";
+  return "";
+}
+function tocGuardReset(){ TOC_BAD=0; TOC_BADSAMPLE=[]; TOC_CLASH=0; TOC_CLASHSAMPLE=[]; TOC_PREFIX_BAD=""; }
 function tocGuardAdd(rel, size, canon){
   var bad=tocRelBad(rel);
   if(bad){ TOC_BAD++; if(TOC_BADSAMPLE.length<8) TOC_BADSAMPLE.push(rel+"  ["+bad+"]"); return; }
@@ -1304,6 +1647,9 @@ function tocGuardAdd(rel, size, canon){
   else { TOC_CLASH++; if(TOC_CLASHSAMPLE.length<8) TOC_CLASHSAMPLE.push(rel+"  (collides on disk with "+prior+")"); }
 }
 function tocGuardReport(){
+  if(TOC_PREFIX_BAD){
+    appendLog("SECURITY: archive REJECTED - its root directory is unsafe ("+TOC_PREFIX_BAD+"). The root name is concatenated into every extraction command, so nothing from this archive is processed.");
+    setStatus("Archive REJECTED: unsafe archive root ("+TOC_PREFIX_BAD+"). Treat this bundle as tampered - do not analyse it on this workstation.","err"); return; }
   if(TOC_BAD) appendLog("SECURITY: "+TOC_BAD+" archive member(s) REJECTED for unsafe names:\n  "+TOC_BADSAMPLE.join("\n  "));
   if(TOC_CLASH) appendLog("SECURITY: "+TOC_CLASH+" archive member(s) SKIPPED - their names collide with another member after Windows canonicalisation (kept the first of each pair):\n  "+TOC_CLASHSAMPLE.join("\n  "));
   if(TOC_BAD||TOC_CLASH) setStatus("Index loaded with "+(TOC_BAD+TOC_CLASH)+" unsafe/colliding member name(s) rejected - see log. Treat this bundle as tampered until explained.","err");
@@ -1315,7 +1661,11 @@ function parseTocRaw(txt){
     if(!ln) continue; var m=ln.match(TOC_RE_BSD); if(!m) m=ln.match(TOC_RE_GNU); if(!m) continue;
     var size=parseInt(m[1],10)||0; var path=m[2].replace(/\/+$/,"");   // drop trailing slash (dir entries)
     if(!path) continue;
-    if(!PREFIX){ var sl=path.indexOf("/"); PREFIX = sl>0 ? path.substring(0,sl) : path; }
+    if(!PREFIX){ var sl=path.indexOf("/"); PREFIX = sl>0 ? path.substring(0,sl) : path;
+      /* fail closed: PREFIX is concatenated into every extraction argument, so an unsafe root
+         poisons the whole run - abandon the index rather than process the bundle (v1.17.17). */
+      var pb=tocPrefixBad(PREFIX);
+      if(pb){ TOC=[]; TOCMAP={}; PREFIX=""; TOC_PREFIX_BAD=pb; tocGuardReport(); return; } }
     if(/\/$/.test(m[2])) continue;     // skip directory entries - files only
     var rel=path;
     if(PREFIX && path.indexOf(PREFIX+"/")===0) rel=path.substring(PREFIX.length+1);
@@ -1329,7 +1679,12 @@ function parseTocTsv(tsv){
   var lines=String(tsv).split("\n");
   for(var i=0;i<lines.length;i++){ var ln=trimStr(lines[i]); if(!ln||ln.charAt(0)==="#") continue;
     var tab=ln.indexOf("\t"); if(tab<0) continue; var rel=ln.substring(0,tab); var size=parseInt(ln.substring(tab+1),10)||0;
-    if(!PREFIX && rel.indexOf("__PREFIX__=")===0){ PREFIX=rel.substring(11); continue; }
+    if(!PREFIX && rel.indexOf("__PREFIX__=")===0){ PREFIX=rel.substring(11);
+      /* the cache path must gate PREFIX exactly as the live listing does - a poisoned toc.tsv is
+         otherwise a way to smuggle an unsafe archive root past the check (v1.17.17). */
+      var pb2=tocPrefixBad(PREFIX);
+      if(pb2){ TOC=[]; TOCMAP={}; PREFIX=""; TOC_PREFIX_BAD=pb2; tocGuardReport(); return; }
+      continue; }
     tocGuardAdd(rel, size, canon);
   }
   tocGuardReport();
@@ -1369,8 +1724,11 @@ function tocRange(pre){
   function lb(s){ var lo=0, hi=a.length; while(lo<hi){ var m=(lo+hi)>>1; if(a[m].rel<s) lo=m+1; else hi=m; } return lo; }
   return {a:a, lo:lb(pre), hi:lb(pre+"￿")};
 }
+/* Only ever called for a listing the extractor completed cleanly - the "complete" token is the
+   promise tryTocCache() checks, so a partial index can never be revived from disk (v1.17.17). */
 function cacheToc(archive){
-  try{ var out=["# "+archive+" | "+fileSize(archive), "__PREFIX__="+PREFIX+"\t0"];
+  if(TOC_PARTIAL){ appendLog("TOC cache NOT written - the index is incomplete ("+TOC_PARTIAL+"). Re-indexing on every run until the bundle is re-copied."); return; }
+  try{ var out=["# "+archive+" | "+fileSize(archive)+" | complete", "__PREFIX__="+PREFIX+"\t0"];
     for(var i=0;i<TOC.length;i++) out.push(TOC[i].rel+"\t"+TOC[i].size);
     writeUtf8(tocCachePath(), out.join("\r\n"));
   }catch(e){ appendLog("TOC cache write failed: "+e.message); }
@@ -1564,10 +1922,10 @@ function readMember(rel){
   if(hit!=null) return hit;
   var txt="";
   try{
-    if(MODE==="tree"){ var p=ROOT+"\\"+winRel(rel); txt = fileExists(p)?readUtf8(p):catMember(rel); }
+    if(MODE==="tree"){ var p=ROOT+"\\"+winRel(rel); txt = fileExists(p)?readMemberBounded(p,rel):catMember(rel); }
     else {
       var ep=extractedPath(rel); if(!fileExists(ep)){ if(TOCMAP[rel]==null) return ""; extractMembersToc([rel]); }
-      txt = fileExists(ep) ? readUtf8(ep) : catMember(rel);   // deep / MAX_PATH fallback
+      txt = fileExists(ep) ? readMemberBounded(ep,rel) : catMember(rel);   // deep / MAX_PATH fallback
     }
   }catch(e){ return ""; }
   if(MEMCACHE_N<MEMCACHE_MAX && txt.length<=MEMCACHE_MAXLEN){ MEMCACHE[mk]=txt; MEMCACHE_N++; }
@@ -1688,9 +2046,24 @@ function parseNodeFqdn(){
   }catch(e){}
   return "";
 }
+/* Does this candidate still look like a BUNDLE LABEL rather than a host name? (v1.17.14)
+   A support archive is commonly named "<fqdn>-vcsupport<stamp>.tgz" or "<prefix>-<fqdn>-<date>--<time>-<id>",
+   and sanitHost() turns those into perfectly legal-looking dotted strings. They are filenames, not hosts. */
+function bundleLabelish(s){ s=String(s||"");
+  return /\.(tgz|tar|gz|zip)$/i.test(s) || /\d{4}-\d{2}-\d{2}/.test(s)
+      || /(?:vc|vm|esx)-?support/i.test(s) || /support-log-bundle/i.test(s); }
 /* prefer an FQDN (dotted) over a short label; between two FQDNs keep the longer */
+/* v1.17.14: "between two FQDNs keep the longer" picked the WRONG one when a bundle was named by the
+   VAMI/UI convention. A vc-support archive named "<fqdn>-vcsupport<capture-stamp>.tgz"
+   sanitises to a dotted string LONGER than the real FQDN the bundle's own etc/hosts carries, so the
+   fleet roster - and runinfo's parsedFqdn - reported the FILENAME as the host, and every host-name
+   join against that vCenter (managedHosts, cluster members) silently could not match.
+   Length was only ever a proxy for "more qualified"; a candidate carrying an archive extension or a
+   capture timestamp is LESS qualified, not more, so it now loses outright. */
 function betterHost(cur, alt){ cur=sanitHost(cur||""); alt=sanitHost(alt||"");
   if(!alt) return cur; if(!cur) return alt;
+  var cb=bundleLabelish(cur), ab=bundleLabelish(alt);
+  if(cb && !ab) return alt; if(ab && !cb) return cur;   // a bundle label always loses to a real name
   var cd=cur.indexOf(".")>0, ad=alt.indexOf(".")>0;
   if(ad && !cd) return alt; if(!ad && cd) return cur;
   if(ad && cd) return alt.length>cur.length?alt:cur;
@@ -2233,13 +2606,41 @@ function resolveLog(rels, pat){ if(pat){ var pf=firstPatternFile(rels[0],pat); r
    readUtf8 does. This used to downgrade on ANY error because the zone test was written as
    `if(!/.../.test(...)){}` - an empty body - so a single locked / over-long / missing path
    silently shrank every subsequent read for the rest of the run, with nothing on screen. */
+/* ---- BOUNDED head read (v1.17.18) --------------------------------------------------------------
+   THE "CAPPED" READ WAS NOT CAPPED. ADODB.Stream has no partial load: LoadFromFile materialises the
+   ENTIRE file into the stream's buffer, and only then does ReadText(cap) take the head. So every
+   caller that asked for a small head of a big file - the vpxd name harvest (8 MB of 51 MB rotations),
+   logLines, parseVmwareLogs, and the per-VM click path - was holding the whole decompressed file
+   first. Measured on the reference fleet: memory climbed 336 -> 515 MB across four 51 MB rotations.
+   This is the v1.17.12 lesson recurring INSIDE the function written to enforce it ("never read a
+   whole file to use a little of it"), and it means v1.17.12's bounded head+tail for VM logs was only
+   half true - readTailText seeks with the FSO and really is bounded; this head read never was.
+   Rule now: never hold more than `cap`. ADODB is used only when the file already fits the cap (where
+   LoadFromFile costs nothing extra and full UTF-8 fidelity is free); anything larger goes through the
+   FSO, which reads exactly `cap` characters and no more. That path decodes ANSI rather than UTF-8 -
+   the same trade readTailText has always made - so it is counted and disclosed rather than hidden. */
+var CAPPED_ANSI=0, CAPPED_ANSI_FILES=[];
+/* v1.17.23: "file must fit the cap" was too strict a condition for using ADODB, and it cost fidelity
+   for no memory benefit. Several callers ask for a deliberately TINY head of a merely medium file -
+   parseVmwareLogs reads a 128 KB head of each per-VM vmware.log, which are typically 0.5-7 MB - and
+   those were all pushed onto the ANSI path. Two bad effects: every one of them was silently
+   downgraded from UTF-8 to ANSI (a regression I introduced in v1.17.18), and 54 routine files then
+   appeared in headReadsAnsi on one host, burying the single 50 MB rotation that actually mattered.
+   The thing worth avoiding is loading TENS of megabytes to use a little; loading 8 MB is not that.
+   So ADODB is used when the file fits the cap OR is small in absolute terms, and the bounded FSO
+   path is reserved for files genuinely large enough to threaten the process. */
+var ADODB_LOAD_MAX=8*1024*1024;
 function readCappedText(path, cap){
-  if(FILE_IO==="adodb"){
+  var sz=-1; try{ sz=fileSize(path); }catch(eS){}
+  /* sz<0 means the stat failed - treat as "unknown, therefore possibly huge" and stay bounded */
+  if(FILE_IO==="adodb" && sz>=0 && (sz<=cap || sz<=ADODB_LOAD_MAX)){
     try{ var st=new ActiveXObject("ADODB.Stream"); st.Type=2; st.Charset="utf-8"; st.Open(); st.LoadFromFile(path);
       var t=st.ReadText(cap); st.Close(); return t; }
     catch(e){ if(/safety settings|data source/i.test(e.message||"")){ FILE_IO="fso"; zoneNote(); } }
   }
-  try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); var f=fso.OpenTextFile(path,1,false,0); var out=f.Read(cap); f.Close(); return out; }catch(e2){ return ""; }
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); var f=fso.OpenTextFile(path,1,false,0); var out=f.Read(cap); f.Close();
+    if(sz>cap){ CAPPED_ANSI++; if(CAPPED_ANSI_FILES.length<12) CAPPED_ANSI_FILES.push(baseName(path)+" ("+fmtSize(sz)+")"); }
+    return out; }catch(e2){ return ""; }
 }
 /* return lines of a catalog log; decompress .gz/.zst on demand; cap huge logs */
 var LOG_TRUNC=[];
@@ -2260,7 +2661,10 @@ function logLines(rel, capOverride, noCache){
     txt=readCappedText(src, half)
       +"\n#### TRUNCATED: "+fmtSize(sz-cap)+" in the middle of this log was not read (head+tail of a "+fmtSize(sz)+" file) ####\n"
       +readTailText(src, half);
-    LOG_TRUNC.push(baseName(rel)+" ("+fmtSize(sz)+", read first+last "+fmtSize(half)+"; tail decoded as ANSI - see readTailText)");
+    /* v1.17.21 (P7): the note used to say only "tail decoded as ANSI". Since v1.17.18 the HEAD of an
+       oversized file is read the same bounded, ANSI way, so naming only the tail understated the
+       caveat. One statement now covers both ends. */
+    LOG_TRUNC.push(baseName(rel)+" ("+fmtSize(sz)+", read first+last "+fmtSize(half)+" only; both ends decoded as ANSI rather than UTF-8 to stay inside the memory budget - non-ASCII characters may be mangled, and the MIDDLE of the file was not read at all)");
   }
   else { try{ txt=readUtf8(src); }catch(e){ appendLog("  log "+rel+" -> read error: "+e.message); return []; } }
   var a=String(txt).split("\n"); for(var i=0;i<a.length;i++){ if(a[i].charAt(a[i].length-1)==="\r") a[i]=a[i].substring(0,a[i].length-1); }
@@ -2416,22 +2820,52 @@ function vpxdSelectedRels(){
   return all.length>keep ? all.slice(all.length-keep) : all;             // newest K, chronological order kept
 }
 function vpxdNewestRel(){ var s=vpxdSelectedRels(); return s.length?s[s.length-1]:""; }
+/* ---- total retained-line budget for the merged vpxd set (v1.17.21) ------------------------------
+   THE MEMORY CEILING. The byte caps above bound each FILE; nothing bounded the merged ARRAY, which is
+   built once and held live across every stage. Measured on the reference vCenter: ~270k lines per
+   50 MB rotation, ~195 bytes a line, and the selected set came to ~513k lines - which as JScript
+   strings (UTF-16, plus per-object overhead) is ~220 MB, and matches the +191 MB this one stage added
+   to the process working set. With 'Incl. Rotated Logs' the same arithmetic gives ~1.2M lines and
+   half a gigabyte, which is where a vCenter larger than the reference one would have taken the app
+   past the point mshta survives.
+   The budget is allocated NEWEST-FIRST: the incident window is the newest rotation, so when something
+   has to go it is the oldest lines of the oldest file - the furthest from what is being investigated.
+   Whatever is dropped is disclosed in LOG_TRUNC, so an absence in the analysed window can never be
+   mistaken for an absence in the logs. */
+var VPXD_MAXLINES=400000;
 function vpxdLines(){
   if(VPXD_LINES) return VPXD_LINES;
-  var all=vpxdAllRels(), sel=vpxdSelectedRels(), out=[], names=[], i, j;
-  for(i=0;i<sel.length;i++){
+  var all=vpxdAllRels(), sel=vpxdSelectedRels(), names=[], i, j;
+  var chunks=[], kept=0, dropped=0, skippedFiles=0;
+  /* newest -> oldest, so the budget buys the most recent evidence first */
+  for(i=sel.length-1;i>=0;i--){
+    if(kept>=VPXD_MAXLINES){ skippedFiles++; continue; }
     /* noCache: these lines are retained MERGED in VPXD_LINES - caching the per-file arrays too would
        hold every vpxd line in memory twice */
     var a=logLines(sel[i], (i===sel.length-1)?0:VPXD_OLDCAP, true);      // newest file gets the full LOGCAP
-    for(j=0;j<a.length;j++) out.push(a[j]);
-    names.push(baseName(sel[i]));
+    if(kept+a.length>VPXD_MAXLINES){
+      var room=VPXD_MAXLINES-kept;
+      dropped+=(a.length-room);
+      a=a.slice(a.length-room);          // keep this file's NEWEST lines - drop its oldest
+    }
+    kept+=a.length; chunks.push(a); names.push(baseName(sel[i]));
   }
+  chunks.reverse(); names.reverse();      // back to chronological for every consumer downstream
+  var out=[];
+  for(i=0;i<chunks.length;i++){ var c=chunks[i]; for(j=0;j<c.length;j++) out.push(c[j]); chunks[i]=null; }
+  chunks=null;
   VPXD_SRCNOTE = names.length>1 ? (names[0]+" … "+names[names.length-1]+" ("+names.length+" files)") : (names[0]||"");
   if(all.length>sel.length){
     var note="vpxd: "+(all.length-sel.length)+" older rotation(s) not read (newest "+sel.length+" of "+all.length+(DEEPROT?"":"; tick 'Incl. Rotated Logs' for more")+")";
     LOG_TRUNC.push(note); appendLog("  "+note);
   }
-  if(names.length) appendLog("  vpxd set: "+names.join(", ")+" -> "+nf(out.length)+" lines (chronological)");
+  if(dropped||skippedFiles){
+    var bnote="vpxd: retained-line budget of "+nf(VPXD_MAXLINES)+" reached - "+nf(dropped)+" OLDER line(s)"
+      +(skippedFiles?(" and "+skippedFiles+" whole older rotation(s)"):"")+" in the selected window were NOT analysed."
+      +" The newest evidence is complete; the window simply starts later than the files allow. Narrow the case window or analyse the older rotations separately.";
+    LOG_TRUNC.push(bnote); appendLog("  "+bnote);
+  }
+  if(names.length) appendLog("  vpxd set: "+names.join(", ")+" -> "+nf(out.length)+" lines (chronological)"+(dropped?(" [budget-capped, "+nf(dropped)+" older dropped]"):""));
   VPXD_LINES=out;
   return out;
 }
@@ -2439,7 +2873,7 @@ function vpxdLines(){
 function readMemberGz(rel){
   var src=ensureExtracted(rel); if(!src) return "";
   if(/\.(gz|zst)$/i.test(src)){ var v=viewablePath(src); if(!v) return ""; src=v; }
-  try{ return readUtf8(src); }catch(e){ return ""; }
+  try{ return readMemberBounded(src,rel); }catch(e){ return ""; }
 }
 /* offset-aware (v1.15.0): "2025-06-25T19:00:00+10:00" is 09:00Z, not 19:00Z. vpxd stamps are Z, but
    the appliance auth.log / auditd lines can carry a local +hh:mm offset - treating those as UTC skewed
@@ -2452,10 +2886,52 @@ function toEpoch(iso){ var m=String(iso).match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):
   return ep; }
 function isoNowUtc(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
   return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+"T"+p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds())+"Z"; }
-function isoShort(iso){ var m=String(iso).match(/(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/); return m?(m[1]+" "+m[2]):String(iso); }
+/* "YYYY-MM-DD HH:MM:SS" from an epoch, always in UTC. */
+function epUtcShort(ep){ var d=new Date(ep*1000); function p(x){ return x<10?("0"+x):x; }
+  return d.getUTCFullYear()+"-"+p(d.getUTCMonth()+1)+"-"+p(d.getUTCDate())+" "
+        +p(d.getUTCHours())+":"+p(d.getUTCMinutes())+":"+p(d.getUTCSeconds()); }
+/* v1.17.17 (VS-006): this used to regex the date and time straight out of the STRING, which is only
+   correct while the string is Z-stamped. toEpoch() has understood offsets since v1.15.0 - vpxd is
+   Z, but appliance auth.log / auditd lines can carry a local +hh:mm - so sorting was right while the
+   DISPLAY under a column headed "When (UTC)" was the local wall clock: 19:00+10:00 read as 19:00 UTC
+   when the instant is 09:00 UTC. Rows could therefore appear out of order against their own printed
+   times, and a reported timeline could be ten hours out. Every offset-bearing stamp is now rendered
+   from the normalised epoch; Z and bare stamps keep the cheap string path (they are already UTC). */
+function isoShort(iso){
+  var s=String(iso);
+  if(/\d{2}:\d{2}:\d{2}(?:\.\d+)?\s*[+-]\d{2}:?\d{2}/.test(s)){
+    var ep=toEpoch(s); if(ep) return epUtcShort(ep); }
+  var m=s.match(/(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/); return m?(m[1]+" "+m[2]):s; }
 function epDay(ep){ if(!ep) return 0; var d=new Date(ep*1000); function p(x){return x<10?("0"+x):x;} return Number(d.getUTCFullYear()+""+p(d.getUTCMonth()+1)+p(d.getUTCDate())); }
 function dayNum(s){ var m=String(s).match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if(!m) return 0; function p(x){x=String(x);return x.length<2?("0"+x):x;} return Number(m[1]+p(m[2])+p(m[3])); }
 function inWin(ep){ if(!(DFROM||DTO)) return true; var d=epDay(ep); if(DFROM&&d<DFROM) return false; if(DTO&&d>DTO) return false; return true; }
+/* Is this a real calendar date? dayNum() only pattern-matches digits, so it happily returns a number
+   for an impossible day-of-month or a month past twelve (v1.17.17, VS-014). */
+function validDayStr(s){ s=trimStr(String(s||"")); if(!s) return true;      // empty = no bound, legitimate
+  var m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/); if(!m) return false;
+  var y=+m[1], mo=+m[2], da=+m[3];
+  if(y<1970||y>2999||mo<1||mo>12||da<1||da>31) return false;
+  var d=new Date(Date.UTC(y,mo-1,da));
+  return d.getUTCFullYear()===y && d.getUTCMonth()===mo-1 && d.getUTCDate()===da;   // rejects 02-31 etc.
+}
+/* Reads both boxes, validates, and only then applies the window. Returns the message shown, "" if OK. */
+function caseWindowError(fs, ts){
+  if(!validDayStr(fs)) return "Case window: '"+fs+"' is not a valid date (use YYYY-MM-DD). The window was NOT applied - you are still seeing every event.";
+  if(!validDayStr(ts)) return "Case window: '"+ts+"' is not a valid date (use YYYY-MM-DD). The window was NOT applied - you are still seeing every event.";
+  var f=dayNum(fs), t=dayNum(ts);
+  if(f && t && f>t) return "Case window: 'from' ("+fs+") is AFTER 'to' ("+ts+"), which can never match anything. The window was NOT applied - swap them.";
+  return "";
+}
+function applyCaseWindow(){
+  var fs="", ts="";
+  try{ fs=trimStr($("dfrom").value||""); ts=trimStr($("dto").value||""); }catch(e){}
+  var err=caseWindowError(fs, ts);
+  if(err){ DFROM=0; DTO=0; setStatus(err,"err"); render(); return false; }
+  DFROM=dayNum(fs); DTO=dayNum(ts);
+  if(DFROM||DTO) setStatus("Case window applied: "+(fs||"(open)")+" to "+(ts||"(open)")+" (UTC) - filters Timeline & Logons only; scores are unchanged.","ok");
+  else setStatus("Case window cleared - showing every event.","muted");
+  rescoreForWindow(); render(); return true;
+}
 
 /* IOC list (shared toolkit IOC.txt, family) */
 function parseTerms(t){ var p=String(t).split(/[\r\n,;]+/), o=[]; for(var i=0;i<p.length;i++){ var s=trimStr(p[i]).toLowerCase(); if(s&&s.charAt(0)!=="#") o.push(s); } return o; }
@@ -2869,8 +3345,8 @@ function parseLogons(){
     // auth.log - sshd Accepted/Failed
     var al=logLinesRot(resolveLog(["var/run/log/auth.log","scratch/log/auth.log","var/log/auth.log"]));
     for(i=0;i<al.length;i++){ var ln=al[i]; var ts=(ln.match(/^(\S+Z)/)||[])[1]||"";
-      m=ln.match(/Accepted\s+\S+\s+for\s+(\S+)\s+from\s+([\d.]+)\s+port/); if(m){ ep=toEpoch(ts); LOGON.push(mkLogon(ep,ts,"OK",m[1],m[2],"ssh","auth.log")); continue; }
-      m=ln.match(/Failed\s+password\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+([\d.]+)/); if(m){ ep=toEpoch(ts); LOGON.push(mkLogon(ep,ts,"FAIL",m[1],m[2],"ssh","auth.log")); }
+      m=ln.match(RE_SSH_OK);  if(m){ ep=toEpoch(ts); LOGON.push(mkLogon(ep,ts,"OK",m[1],normIp(m[2]),"ssh","auth.log")); continue; }
+      m=ln.match(RE_SSH_BAD); if(m){ ep=toEpoch(ts); LOGON.push(mkLogon(ep,ts,"FAIL",m[1],normIp(m[2]),"ssh","auth.log")); }
     }
     // hostd.log - "Accepted password for user X from IP"
     var hl=logLinesRot(resolveLog(["var/run/log/hostd.log","scratch/log/hostd.log","var/log/hostd.log"]));
@@ -2889,8 +3365,8 @@ function parseLogons(){
     // appliance auth.log ssh
     var val=logLinesRot(resolveLog(["var/log/auth.log"]));
     for(i=0;i<val.length;i++){ var vt=(val[i].match(/^(\S+[\+Z][\d:]*)/)||[])[1]||"";
-      m=val[i].match(/Accepted\s+\S+\s+for\s+(\S+)\s+from\s+([\d.]+)/); if(m){ ep=toEpoch(vt); LOGON.push(mkLogon(ep,vt,"OK",m[1],m[2],"ssh","auth.log")); continue; }
-      m=val[i].match(/Failed\s+password\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+([\d.]+)/); if(m){ ep=toEpoch(vt); LOGON.push(mkLogon(ep,vt,"FAIL",m[1],m[2],"ssh","auth.log")); }
+      m=val[i].match(RE_SSH_OK);  if(m){ ep=toEpoch(vt); LOGON.push(mkLogon(ep,vt,"OK",m[1],normIp(m[2]),"ssh","auth.log")); continue; }
+      m=val[i].match(RE_SSH_BAD); if(m){ ep=toEpoch(vt); LOGON.push(mkLogon(ep,vt,"FAIL",m[1],normIp(m[2]),"ssh","auth.log")); }
     }
     parseUtmpLogons();   // v1.17.0: binary wtmp (OS login/logout/reboot) + btmp (failed logins w/ source)
   }
@@ -3646,7 +4122,7 @@ function runAnalysis(){
   /* traced + GC'd stage wrapper, matching fleet's fstep. Single-Analyze previously had NO gcNow() at
      all: the theory was that its setTimeout chunks let the collector run on its own, but that is an
      assumption, not a measurement, and it costs nothing to stop relying on it. */
-  function astep(name, fn){ trace("stage "+name); safeStep(name, fn); gcNow(); }
+  function astep(name, fn){ trace("stage "+name); touchOutputLock(); safeStep(name, fn); gcNow(); }
   window.setTimeout(function(){
     astep("maint", parseMaint); astep("logons", parseLogons); astep("bruteforce", bfApply); $("anStatus").innerHTML="Parsed logons ("+nf(LOGON.length)+")… actions…";
     window.setTimeout(function(){ try{
@@ -3678,8 +4154,14 @@ function runAnalysis(){
       trace("tail: amendRunInfo"); amendRunInfo();
       var msg=nf(LOGON.length)+" logons, "+nf(ACTIONS.length)+" actions, "+nf(TIMELINE.length)+" timeline, "+nf(IOCHITS.length)+" IOC hits.";
       var warn=ANALYSIS_ERRS.length?("  ("+ANALYSIS_ERRS.length+" stage(s) failed: "+ANALYSIS_ERRS.join(", ")+" - see Show/Hide Log)"):"";
-      $("anStatus").innerHTML=msg+warn+(LOG_TRUNC.length?("  (capped: "+LOG_TRUNC.join("; ")+")"):"");
+      /* v1.17.17 - XSS INTO A FULL-TRUST HTA. LOG_TRUNC entries are built from baseName(rel), i.e. an
+         ARCHIVE MEMBER NAME, which is attacker-chosen on a compromised host. This was the only sink
+         in the app that put bundle-controlled text into innerHTML unescaped (setStatus/appendLog both
+         call esc(); the report writer calls rEsc()), so a log file named with an <img onerror=...>
+         payload and large enough to trip the read cap executed script with full HTA privileges. */
+      $("anStatus").innerHTML=esc(msg+warn+(LOG_TRUNC.length?("  (capped: "+LOG_TRUNC.join("; ")+")"):""));
       setStatus((ANALYSIS_ERRS.length?"Log analysis finished with "+ANALYSIS_ERRS.length+" partial failure(s) - ":"Log analysis complete - ")+msg, ANALYSIS_ERRS.length?"err":"ok");
+      if(CAPPED_ANSI) appendLog("  bounded head reads: "+nf(CAPPED_ANSI)+" oversized file(s) had only their first bytes read, decoded as ANSI to stay inside the memory cap (non-ASCII characters in those heads may be mangled): "+CAPPED_ANSI_FILES.join(", ")+(CAPPED_ANSI>CAPPED_ANSI_FILES.length?", …":""));
       trace("tail: renderAnStats"); renderAnStats();
       BUSY=false; $("anBtn").disabled=false;
       trace("tail: render TAB="+TAB);
@@ -4970,11 +5452,28 @@ function findVmxRels(){ var out=[];
   return out; }
 /* read one archive member via stdout (tar -xO) into a SHORT temp file - immune to Windows MAX_PATH
    (deep vSAN vmfs/volumes/vsan:UUID/... paths overflow 260 chars when extracted under _Processed). */
+/* ---- bounded CONFIG-member read (v1.17.21) ------------------------------------------------------
+   readMember/readMemberGz/catMember all funnelled into readUtf8(), which reads a file WHOLE. Config
+   members are normally kilobytes, so this never bit in practice - but nothing enforced that, and a
+   single oversized member (a command capture that ran away, or a hostile bundle) was read entirely
+   into memory. Everything else that reads a file is now budgeted; this was the last unbounded path.
+   MEMCACHE was already capped (64 entries x 1 MB), so only the READ needed bounding, not the cache. */
+var MEMBER_MAXLEN=16*1024*1024;
+function readMemberBounded(path, rel){
+  var sz=-1; try{ sz=fileSize(path); }catch(e){}
+  if(sz>MEMBER_MAXLEN){
+    var note=baseName(rel||path)+" ("+fmtSize(sz)+", read first "+fmtSize(MEMBER_MAXLEN)+" only - config member over the read budget)";
+    if(!logWasCapped(baseName(rel||path))) LOG_TRUNC.push(note);
+    appendLog("  "+note);
+    return readCappedText(path, MEMBER_MAXLEN);
+  }
+  return readUtf8(path);
+}
 function catMember(rel){
-  if(MODE==="tree"){ try{ var p=ROOT+"\\"+winRel(rel); return fileExists(p)?readUtf8(p):""; }catch(e){ return ""; } }
+  if(MODE==="tree"){ try{ var p=ROOT+"\\"+winRel(rel); return fileExists(p)?readMemberBounded(p,rel):""; }catch(e){ return ""; } }
   var fso=new ActiveXObject("Scripting.FileSystemObject"), tmp=fso.GetSpecialFolder(2)+"", out=tmp+"\\vsbcat_"+uid()+".dat";
   runBat(['"'+batEsc(TAR)+'" -xOf "'+batEsc(ARCHIVE)+'" "'+batEsc(PREFIX+"/"+rel)+'" > "'+batEsc(out)+'" 2>nul'], false);
-  var t=""; try{ if(fso.FileExists(out)){ t=readUtf8(out); fso.DeleteFile(out); } }catch(e){}
+  var t=""; try{ if(fso.FileExists(out)){ t=readMemberBounded(out,rel); fso.DeleteFile(out); } }catch(e){}
   return t;
 }
 /* batch-extract members to a SHORT %TEMP% dir with --strip-components=1 (drops the long <host> prefix)
@@ -5511,7 +6010,11 @@ function renderVmsSimple(rows){
     var dkTip = v.disks.length
       ? ((isVc?"from backup I/O: ":"")+v.disks.join("  |  ")+(v.diskDetail&&v.diskDetail.length?("\nDisk extents (start-end sector = disk pointers):\n"+(function(dd){ var a=[]; for(var x=0;x<dd.length;x++) a.push(dd[x].file+" ["+dd[x].gb.toFixed(1)+" GB: "+dd[x].sum+"]"); return a.join("\n"); })(v.diskDetail)):""))
       : (isVc?"no backup .vmdk reads seen for this VM in the log window":"no virtual disks declared in the .vmx");
-    h+='<tr'+(isEsxi?(' data-cfg="'+esc(v.cfg)+'" data-nm="'+esc(v.name)+'" style="cursor:pointer" title="Click to open the activity timeline (power / snapshot / migration / guest-op) for '+esc(v.name)+'"'):'')+'>'
+    /* v1.17.19: vCenter rows are clickable too - openVcVm() shows MoRefs, the vSAN GUID recovery
+       path and the VM's vpxd task history. Previously gated to ESXi only, so a click on a vCenter
+       bundle did nothing and explained nothing. */
+    h+='<tr'+(isEsxi?(' data-cfg="'+esc(v.cfg)+'" data-nm="'+esc(v.name)+'" style="cursor:pointer" title="Click to open the activity timeline (power / snapshot / migration / guest-op) for '+esc(v.name)+'"')
+                   :(isVc?(' data-vcvm="'+esc(v.name)+'" style="cursor:pointer" title="Click for '+esc(v.name)+'&#39;s MoRef(s), vSAN GUID recovery path and vCenter task history. A vc-support bundle has no .vmx or vmware.log, so the power/snapshot timeline lives in the ESXi host bundle."'):''))+'>'
       +'<td><b>'+esc(v.name)+'</b></td>'
       +'<td class="muted" title="'+esc(osTip)+'">'+esc(v.os||"-")+'</td>'
       +'<td class="mono" style="text-align:center" title="'+esc(szTip)+'">'+(v.vcpu?v.vcpu:'<span class="muted">-</span>')+'</td>'
@@ -5521,7 +6024,8 @@ function renderVmsSimple(rows){
       +'<td>'+stat+'</td></tr>'; }
   h+='</tbody>'; $("vmsTbl").innerHTML=h;
   var trs=$("vmsTbl").getElementsByTagName("tr");
-  for(var t=0;t<trs.length;t++){ if(trs[t].getAttribute("data-cfg")){ trs[t].onclick=function(){ openVm(this.getAttribute("data-cfg"), this.getAttribute("data-nm")); }; } }
+  for(var t=0;t<trs.length;t++){ if(trs[t].getAttribute("data-cfg")){ trs[t].onclick=function(){ openVm(this.getAttribute("data-cfg"), this.getAttribute("data-nm")); }; }
+    else if(trs[t].getAttribute("data-vcvm")){ trs[t].onclick=function(){ openVcVm(this.getAttribute("data-vcvm")); }; } }
   setupColResizeFor($("vmsTbl"), BTYPE==="vcsa"?"vmsvcs":"vmssimp"); freezeThs($("vmsScroll"));
 }
 function renderVms(){
@@ -5608,7 +6112,7 @@ function renderVcsaVms(){
     var mo=v.mo.join(", ")+(v.moBase?((v.mo.length?" | ":"")+v.moBase+" (baseline)"):"");
     var srcs=[]; for(var sk in v.src){ if(v.src.hasOwnProperty(sk)) srcs.push(sk); }
     var srcTip=srcs.length?("evidence sources: "+srcs.join(", ")):"";
-    h+='<tr><td><b title="'+esc(srcTip||v.name)+'">'+esc(v.name)+'</b></td><td class="mono muted" style="font-size:11px" title="'+esc(v.mo.length?("current MoRef(s): "+v.mo.join(", ")):"no current MoRef in the retained logs")+(v.moBase?("\nbaseline MoRef: "+v.moBase):"")+'">'+esc(mo)+'</td>'
+    h+='<tr data-vcvm="'+esc(v.name)+'" style="cursor:pointer"><td><b title="'+esc(srcTip||v.name)+'">'+esc(v.name)+'</b></td><td class="mono muted" style="font-size:11px" title="'+esc(v.mo.length?("current MoRef(s): "+v.mo.join(", ")):"no current MoRef in the retained logs")+(v.moBase?("\nbaseline MoRef: "+v.moBase):"")+'">'+esc(mo)+'</td>'
       +'<td class="mono" title="'+esc(v.host?("running on "+v.host+" (newest DRS dump)"):"not powered on in the newest DRS dump")+'">'+esc(v.host||"-")+'</td>'
       +'<td class="mono" style="text-align:center" title="'+esc(v.specSrc?("source: "+v.specSrc):"no DRS VMData for this VM (not powered on in the newest dump)")+'">'+(v.vcpu?v.vcpu:'<span class="muted">-</span>')+'</td>'
       +'<td class="mono" style="text-align:center" title="'+esc(v.specSrc?("source: "+v.specSrc):"no DRS VMData for this VM (not powered on in the newest dump)")+'">'+esc(fmtMB(v.memMB))+'</td>'
@@ -5617,10 +6121,104 @@ function renderVcsaVms(){
       +'<td title="'+esc(v.status||"")+'">'+(v.running?'<span class="pgood">Powered On</span>':'<span class="muted">'+esc(titleLabel(trunc(v.status,40)))+'</span>')+'</td>'
       +'<td>'+(v.enc?('<span class="tag" style="background:#3a1010;color:#ff8b8b;border:1px solid #b02020" title="'+esc(v.enc)+'">'+esc(trunc(v.enc,64))+'</span>'):'<span class="muted">-</span>')+'</td></tr>'; }
   h+='</tbody>'; $("vmsTbl").innerHTML=h;
+  var vtrs=$("vmsTbl").getElementsByTagName("tr");
+  for(var vt=0;vt<vtrs.length;vt++){ if(vtrs[vt].getAttribute("data-vcvm")){ vtrs[vt].onclick=function(){ openVcVm(this.getAttribute("data-vcvm")); }; } }
   setupColResizeFor($("vmsTbl"),"vmsvc"); freezeThs($("vmsScroll"));
+}
+/* ---- per-VM detail on a vCENTER bundle (v1.17.19) ----------------------------------------------
+   Reported from the field: on a vc-support bundle no VM could be clicked. Correct diagnosis, two
+   faults. A vc-support bundle has no .vmx and no per-VM vmware.log, so openVm() has nothing to read
+   and the Simplified table gated its click wiring on `isEsxi` - rows were inert, with nothing on
+   screen saying why. Worse, the FULL table still rendered `cursor:pointer` and a tooltip promising
+   "click to open the activity timeline", so it advertised a click it never honoured.
+   The bundle does hold a per-VM story, just a different one: MoRef(s) current and baseline,
+   placement, sizing from the DRS dump, disks seen in backup traffic, the vSAN GUID path that is the
+   recovery handle, the restore / re-registration signal, and every vpxd task logged against the VM.
+   That is what a click opens now - the vCenter analogue of the ESXi activity timeline. */
+/* parseVms sets cfg to "<folder>/(vmx missing)" when no .vmx was captured (absent or ransom-renamed)
+   so the FOLDER still resolves. Anything keyed off "is there a config to show?" must ask this, not
+   just test cfg for emptiness - the string is non-empty and points at nothing. */
+function vmxIsMissing(cfgRel){ return /\(vmx missing\)$/i.test(String(cfgRel||"")); }
+function vcVmByName(nm){ for(var i=0;i<VMS.length;i++){ if(VMS[i] && VMS[i].name===nm) return VMS[i]; } return null; }
+function vmEventsFor(nm){ var o=[], k=lc(nm); for(var i=0;i<VMEV.length;i++){ if(lc(VMEV[i].vm)===k) o.push(VMEV[i]); }
+  o.sort(function(a,b){ return a.epoch-b.epoch; }); return o; }
+function kvRow(k, val, tip){
+  return '<tr><td class="k mono muted" style="width:190px;vertical-align:top"'+(tip?(' title="'+esc(tip)+'"'):'')+'>'+esc(k)+'</td>'
+        +'<td class="mono"'+(tip?(' title="'+esc(tip)+'"'):'')+'>'+(val||'<span class="muted">-</span>')+'</td></tr>';
+}
+function openVcVm(nm){
+  trace("openVcVm: "+nm);
+  var v=vcVmByName(nm);
+  if(!v){ setStatus("VM '"+nm+"' is no longer in the parsed list - re-run the analysis.","err"); return; }
+  var ev=vmEventsFor(nm), i;
+  var srcs=[]; for(var sk in v.src){ if(v.src.hasOwnProperty(sk)) srcs.push(sk); }
+  var mo=(v.mo&&v.mo.length)?v.mo.join(", "):"", moB=v.moBase||"";
+
+  var h='<div style="font-size:13px;margin-bottom:6px"><b>'+esc(v.name)+'</b> - vCenter view '
+    +'<span class="muted" style="font-size:11px">reconstructed from vpxd / DRS dumps / the vSAN-health baseline</span></div>'
+    +'<div class="muted" style="font-size:11px;margin-bottom:8px">A vc-support bundle carries no <span class="mono">.vmx</span> and no per-VM '
+    +'<span class="mono">vmware.log</span>, so there is no power / snapshot / guest-op timeline here - that lives in the ESXi host bundle for '
+    +(v.host?('<b>'+esc(v.host)+'</b>'):'this VM&#39;s host')+'. What vCenter itself recorded is below.</div>';
+
+  h+='<div class="panel" style="margin-bottom:10px"><h4>Identity &amp; recovery</h4><table>'
+    +kvRow("MoRef (current)", mo?esc(mo):"", "vCenter managed-object ID(s) seen in the retained vpxd logs.")
+    +kvRow("MoRef (baseline)", moB?esc(moB):"", "MoRef in the vSAN-health baseline snapshot. A DIFFERENT value from the current one means the VM was re-registered - deleted and restored, typically - since that snapshot.")
+    +kvRow("Host", v.host?esc(v.host):"", v.host?("Placement from the newest DRS dump."):"Not powered on in the newest DRS placement dump, so no host is known.")
+    +kvRow("vCPU / vRAM", (v.vcpu?esc(v.vcpu+" vCPU"):"")+(v.memMB?(" / "+esc(fmtMB(v.memMB))):""), v.specSrc?("source: "+v.specSrc):"No DRS VMData for this VM - it was not powered on in the newest dump, which is the only sizing source in a vCenter bundle.")
+    +kvRow("vDisks (backup I/O)", v.disks&&v.disks.length?esc(v.disks.join(", ")):"", "Disks inferred from backup .vmdk reads in the vpxd /folder traffic. NOT a full disk list - a vc-support bundle has no .vmx.")
+    +kvRow("vSAN GUID path", v.guidPath?('<span class="lnk" data-copy="'+esc(v.guidPath)+'">'+esc(v.guidPath)+'</span>'):"", v.guidPath?("THE RECOVERY HANDLE - it survives a ransomware rename of the .vmx. Source: "+(v.guidSrc||"vpxd")+". Click to copy."):(v.vsan?"On vSAN, but no folder GUID appeared in the retained logs.":"Not on vSAN - no vSAN GUID path."))
+    +kvRow("Status", esc(titleLabel(v.status||(v.running?"powered on":""))), v.status||"")
+    +kvRow("Encrypted / restored", v.enc?('<span class="hl-ioc">'+esc(v.enc)+'</span>'):"", v.enc?("Advisory recovery/encryption signal - correlate with the incident window before concluding."):"No restore or re-registration signal for this VM.")
+    +kvRow("Evidence sources", srcs.length?esc(srcs.join(", ")):"", "Which parsers contributed this row - your provenance for everything above.")
+    +'</table></div>';
+
+  h+='<div class="panel"><h4>vCenter tasks for this VM <span class="sub">- '+nf(ev.length)+' event(s) from the retained vpxd window</span></h4>';
+  if(!ev.length){
+    h+='<div class="muted" style="font-size:12px">No vpxd task recorded against this VM in the retained log window. That is a statement about the WINDOW, not about the VM - tick <b>Incl. Rotated Logs</b> and re-Analyze to reach further back.</div>';
+  } else {
+    h+='<div class="scroll" style="max-height:40vh"><table><thead><tr>'
+      +'<th title="When vCenter recorded the task, UTC.">When (UTC)</th>'
+      +'<th title="Create / Delete / Modify / Start / Stop / Reboot / Snapshot / Migrate - hover a pill for what that type means.">Type</th>'
+      +'<th title="What was done, in plain terms, derived from the method vpxd logged.">Event</th>'
+      +'<th title="The raw VMODL method exactly as vpxd recorded it - the verbatim evidence behind the Event column.">Method</th>'
+      +'<th title="Who asked for it - session-matched where the line carries a session[guid] (exact), otherwise the nearest preceding human SAML login within 12h (APPROXIMATE).">Actor</th>'
+      +'<th title="Where the request came in, or the raw opID.">Via</th>'
+      +'</tr></thead><tbody>';
+    for(i=0;i<ev.length;i++){ var e=ev[i];
+      h+='<tr><td class="mono">'+esc(e.when)+'</td>'
+        +'<td><span class="tag '+vmEvCls(e.kind)+'" title="'+esc(vmEvKindTip(e.kind))+'">'+esc(vmEvKindLbl(e.kind))+'</span></td>'
+        +'<td>'+esc(e.what)+'</td>'
+        +'<td class="mono muted" style="font-size:11px">'+esc(e.method)+'</td>'
+        +'<td class="mono">'+esc(e.actor||"-")+'</td>'
+        +'<td class="mono muted" style="font-size:11px">'+esc(e.via||"-")+'</td></tr>'; }
+    h+='</tbody></table></div>';
+  }
+  h+='</div>';
+
+  $("detBody").innerHTML=h; showEl("detailCard",true); wireFreeze($("detBody")); wireCopyCells($("detBody"));
+  try{ $("detailCard").scrollIntoView(); }catch(e){}
+  var del=0; for(i=0;i<ev.length;i++) if(ev[i].kind==="delete") del++;
+  setStatus(nf(ev.length)+" vCenter task(s) for "+nm+(del?(" - "+del+" delete/unregister (review against the incident window)"):""), del?"err":"ok");
 }
 /* ---- Virtual Machine events: render + multiselect type filter ---- */
 var VMEV_F={create:1,delete:1,modify:1,start:1,stop:1,reboot:1,snapshot:1,migrate:1,other:1};
+/* v1.17.14: the Type column rendered the raw parse key ("delete", "snapshot") - lowercase and
+   unexplained, so the single most load-bearing column on this table said the least. Same wording as
+   the Type filter checkboxes above the table, so the pill and the control that hides it agree. */
+var VMEV_KIND_LBL={create:"Create",delete:"Delete",modify:"Modify",start:"Start",stop:"Stop",
+                   reboot:"Reboot",snapshot:"Snapshot",migrate:"Migrate",other:"Other"};
+var VMEV_KIND_TIP={
+  create:"Create - the VM was created, cloned, or registered into inventory.",
+  delete:"Delete - the VM was destroyed (deleted from disk) or unregistered from inventory. The ransomware-relevant one.",
+  modify:"Modify - the VM was reconfigured (hardware/settings), renamed, or its template state changed.",
+  start:"Start - the VM was powered on.",
+  stop:"Stop - the VM was powered off or suspended, or a guest shutdown/standby was requested. A burst of these before an encryption window is the classic tell.",
+  reboot:"Reboot - the VM was reset (hard reboot) or a guest reboot was requested.",
+  snapshot:"Snapshot - a snapshot was created, removed, consolidated, or reverted. Snapshot removal destroys restore points - review against any encryption window.",
+  migrate:"Migrate - the VM was migrated / relocated (vMotion or Storage vMotion), including DRS-initiated moves.",
+  other:"Other - a lifecycle event outside the categories above, e.g. an ISO image mounted (an attacker-tooling / data-movement vector). Read the Event column for what it was."};
+function vmEvKindLbl(k){ return VMEV_KIND_LBL[k] || (String(k||"").charAt(0).toUpperCase()+String(k||"").substring(1)); }
+function vmEvKindTip(k){ return VMEV_KIND_TIP[k] || (vmEvKindLbl(k)+" - event type exactly as the parse classified it."); }
 function vmEvCls(k){
   if(k==="delete") return "ioc";                       // destroyed / unregistered - red
   if(k==="stop"||k==="reboot") return "danger";
@@ -5672,7 +6270,7 @@ function renderVmEvents(){
   var h='<thead><tr>'
     +'<th title="The VM the event acted on. vCenter: resolved from the vm-N MoRef via the names vpxd logs. ESXi: resolved from the hostd task objID via vmInventory.xml - an unresolved objID means the VM is no longer in inventory, which is itself consistent with a delete/unregister.">VM</th>'
     +'<th title="When the operation was requested, UTC.">When (UTC)</th>'
-    +'<th title="create / delete / modify / start / stop / reboot / snapshot / migrate - colour-coded, delete in red. Use the Type checkboxes above to narrow.">Type</th>'
+    +'<th title="Create / Delete / Modify / Start / Stop / Reboot / Snapshot / Migrate (and Other) - colour-coded, Delete in red. Hover any pill for what that type means. Use the Type checkboxes above to narrow.">Type</th>'
     +'<th title="What was done, in plain terms, derived from the method the node logged.">Event</th>'
     +'<th title="The raw API method exactly as the log records it - vpxd writes the VMODL name (lowercase-initial, no _Task suffix); ESXi hostd writes e.g. vim.VirtualMachine.unregister. This is the verbatim evidence behind the Event column.">Method</th>'
     +'<th title="Who asked for it. ESXi: the user hostd recorded on the task. vCenter: session-matched via session[guid] where the log carries one (exact); otherwise the nearest preceding human SAML login within 12h - APPROXIMATE, not a proven attribution.">Actor</th>'
@@ -5683,7 +6281,7 @@ function renderVmEvents(){
   for(i=0;i<rows.length;i++){ var e=rows[i];
     h+='<tr><td'+(e.vmNote?(' title="'+esc(e.vmNote)+'"'):'')+'><b>'+esc(e.vm)+'</b></td>'
       +'<td class="mono">'+esc(e.when)+'</td>'
-      +'<td><span class="tag '+vmEvCls(e.kind)+'">'+esc(e.kind)+'</span></td>'
+      +'<td><span class="tag '+vmEvCls(e.kind)+'" title="'+esc(vmEvKindTip(e.kind))+'">'+esc(vmEvKindLbl(e.kind))+'</span></td>'
       +'<td>'+esc(e.what)+'</td>'
       +'<td class="mono muted" style="font-size:11px">'+esc(e.method)+'</td>'
       +'<td class="mono">'+esc(e.actor||"-")+'</td>'
@@ -5769,7 +6367,36 @@ function parseVmLog(cfgRel){
         var e={when:isoShort(m[1]), epoch:toEpoch(m[1]), kind:kind, ev:meth, opID:op, via:via, detail:"", src:src};
         if(meth==="Snapshot.Take") pendTake=ev.length;
         ev.push(e); continue; }
-      if(pendTake>=0){ var sm=ln.match(/SnapshotVMX_TakeSnapshot start:\s*'([^']*)'/); if(sm){ ev[pendTake].detail="name: "+sm[1]; pendTake=-1; } }
+      if(pendTake>=0){ var sm=ln.match(/SnapshotVMX_TakeSnapshot start:\s*'([^']*)'/); if(sm){ ev[pendTake].detail="name: "+sm[1]; pendTake=-1; continue; } }
+      /* ---- VMX lifecycle fallback (v1.17.14) -----------------------------------------------
+         The Vigor lines above are only written while the VMX is UP and accepting client requests.
+         A VM that never got that far - e.g. a power-on that failed on "No space left on device",
+         which logs PowerOn, VMX_PowerOn and "VMX has left the building" and nothing else - produced
+         "0 event(s)" in this click view while the VMs-tab events table listed rows for that same VM
+         sourced from that same vmware.log. Two parsers over one file must never disagree about
+         whether it is empty. These are the lines parseVmwareLogs() harvests for the table (power-on,
+         clean exit, snapshot take / delete / consolidate, ISO mount), so the click view is now a
+         superset of the table's rows for the VM rather than a stricter, silently narrower read. */
+      if(ln.indexOf("VigorTransportProcessClientPayload")>=0) continue;         // already handled above
+      if(ln.indexOf("SnapshotVMX")<0 && ln.indexOf("PowerOn request")<0
+         && ln.indexOf("left the building")<0 && ln.indexOf(".iso")<0) continue;   // cheap prefilter
+      var tm=ln.match(/^(\S+Z)/); if(!tm) continue;
+      var fe=null, fop="";
+      if(/Bootstrap\.PowerOn request/.test(ln)){ fop=(ln.match(/opID=([^\s:]+(?::[^\s]+)?)/)||[])[1]||"";
+        fe={kind:"power", ev:"VMX.PowerOn", detail:"VM powered on (guest log)"}; }
+      else if(/left the building/.test(ln)) fe={kind:"power", ev:"VMX.Exit", detail:"VMX exited (clean power-off / shutdown)"};
+      else if(/SnapshotVMX_TakeSnapshot start/.test(ln)){ var fsn=(ln.match(/start:\s*'([^']*)'/)||[])[1]||"";
+        fe={kind:"snapshot", ev:"SnapshotVMX.Take", detail:"snapshot created"+(fsn?(" - name: "+trunc(fsn,60)):"")}; }
+      else if(/SnapshotVMX.*(DeleteSnapshot|Consolidate)/.test(ln))
+        fe={kind:"snapshot", ev:"SnapshotVMX.Delete/Consolidate", detail:"snapshot removed / consolidated"};
+      else if(/Connecting to.*\.iso/i.test(ln)){ var fiso=(ln.match(/Connecting to\s+([^\s,]+\.iso)/i)||[])[1]||"";
+        fe={kind:"other", ev:"CDROM.Connect", detail:"ISO image mounted"+(fiso?(" - "+trunc(baseName(fiso),50)):"")}; }
+      if(!fe) continue;
+      /* vmware.log records the VMX's own view and names no principal - the opID (when the line
+         carries one) is the only attribution available, so say "VMX itself" rather than invent one. */
+      ev.push({when:isoShort(tm[1]), epoch:toEpoch(tm[1]), kind:fe.kind, ev:fe.ev, opID:fop,
+        via:(fop?(/^esxui/i.test(fop)?"ESXi Host Client":((/^lro/i.test(fop)||/^host-/i.test(fop))?"vCenter task":"direct API / vim-cmd")):"VMX itself (no opID)"),
+        detail:fe.detail, src:src});
     }
   }
   ev.sort(function(a,b){ return a.epoch-b.epoch; });
@@ -5785,10 +6412,25 @@ function openVm(cfgRel, vmName){
   var snap=0, del=0, poff=0, gop=0, vc=0, i;
   for(i=0;i<r.events.length;i++){ var e=r.events[i]; if(e.kind==="snapshot"){ snap++; if(/Delete|Consolidate/.test(e.ev)) del++; }
     if(e.ev==="Bootstrap.PowerOff") poff++; if(e.kind==="guest-op") gop++; if(e.via==="vCenter task") vc++; }
+  /* v1.17.19: `cfg` is deliberately "<folder>/(vmx missing)" for a VM whose .vmx is absent or
+     ransom-renamed - the folder still resolves, which is the point. But the header offered
+     "view .vmx config" for it anyway: a link to a file the tool has ALREADY concluded does not
+     exist, which fails with "could not read (vmx missing)" when clicked. Offering an action that
+     cannot work is the same fault just fixed on the vCenter board. For these VMs the FOLDER is the
+     artifact that matters - it is the recovery handle - so that is what the header offers. */
+  var noVmx=vmxIsMissing(cfgRel);
+  var vmDir=String(cfgRel||"").replace(/\/[^\/]*$/,"");
   var h='<div style="font-size:13px;margin-bottom:6px"><b>'+esc(vmName||baseName(cfgRel))+'</b> - activity timeline '
-    +'<span class="muted mono" style="font-size:11px">'+esc(cfgRel)+'</span> '
-    +'<span class="lnk" style="margin-left:8px" data-vmx="'+esc(cfgRel)+'">view .vmx config</span></div>';
-  if(!r.logs.length){ h+='<div class="muted" style="font-size:12px">No vmware.log for this VM in the bundle (guest may be powered off, or its datastore was not captured).</div>'; }
+    +'<span class="muted mono" style="font-size:11px">'+esc(noVmx?vmDir:cfgRel)+'</span> '
+    +(noVmx
+      ? ('<span class="tag ioc" style="margin-left:8px" title="'+esc("No .vmx was captured for this VM - it is missing or was ransom-renamed, which is why the VM is flagged. There is no config to show, so no link is offered. The FOLDER above is what matters: it is where the VM's files live and it survives a rename, so it is the recovery handle. Click it to copy.")+'">.vmx missing - no config to show</span>'
+         +(vmDir?(' <span class="lnk" style="margin-left:6px" data-copy="'+esc(vmDir)+'" title="Copy the VM folder path - the recovery handle.">copy VM folder</span>'):''))
+      : ('<span class="lnk" style="margin-left:8px" data-vmx="'+esc(cfgRel)+'">view .vmx config</span>'))
+    +'</div>';
+  if(!r.logs.length){ h+='<div class="muted" style="font-size:12px">No vmware.log for this VM in the bundle (guest may be powered off, or its datastore was not captured). '
+    +(noVmx
+      ? 'Its <span class="mono">.vmx</span> is missing or ransom-renamed too, so there is no config to fall back on - the folder path above is the recovery handle. Check the Security tab&#39;s ransomware indicators and the host&#39;s shell.log for what happened to this VM.'
+      : 'The VM&#39;s configuration is still readable - click <b>view .vmx config</b> above for its hardware, disk paths and datastore.')+'</div>'; }
   else {
     h+='<div class="muted" style="font-size:11px;margin-bottom:6px">'+r.events.length+' event(s) from '+r.logs.length+' log file(s)'
       +(snap?(' &middot; <b>'+snap+' snapshot op(s)'+(del?(", "+del+" delete/consolidate"):"")+'</b>'):'')
@@ -5797,13 +6439,13 @@ function openVm(cfgRel, vmName){
     /* a partial read must never look complete - these logs run to hundreds of MB and only the
        first and last 2 MB are parsed, so the middle is UNREAD, not empty. */
     if(r.capped && r.capped.length) h+='<div class="maxwarn" style="font-size:11px;margin-bottom:6px" title="'+esc("Only the first and last "+fmtSize(VMLOG_CLICK_HEAD)+" of each oversized log were read - the middle was NOT parsed, so events there are missing rather than absent. Open the log itself from the Key Files tab for the full history.")+'">&#9888; Large log(s) read head+tail only: '+esc(r.capped.join(', '))+'</div>';
-    if(!r.events.length) h+='<div class="muted" style="font-size:12px">No power / snapshot / migration / guest-op events (only routine guest-stats noise, filtered).</div>';
+    if(!r.events.length) h+='<div class="muted" style="font-size:12px">No power / snapshot / migration / guest-op or VMX lifecycle events in this log (only routine guest-stats noise, filtered). This is a statement about the log, not about the VM - click <b>view .vmx config</b> above for its hardware, disk paths and datastore.</div>';
     else { h+='<div class="scroll" style="max-height:44vh"><table><thead><tr><th title="Event time from the VM&#39;s own vmware.log, UTC.">When (UTC)</th><th title="The VMX operation: power, snapshot, migration or guest-op. Snapshot delete/consolidate before an encryption window is the ransomware tell.">Event</th><th title="Grouping for the event: power / snapshot / migrate / guest-op.">Kind</th><th title="Where the operation came from: a vCenter task (opID lro-*), the ESXi Host Client, or a direct API / vim-cmd call on the host.">Initiator</th><th title="Operation ID. An lro-* value joins this VM event to vpxa/vpxd - the vCenter&rarr;host&rarr;VM chain.">opID</th><th title="Extra context for the event, e.g. the snapshot name.">Detail</th><th title="Which vmware.log (or rotation) the event came from.">Log</th></tr></thead><tbody>';
       for(i=0;i<r.events.length;i++){ var ev=r.events[i]; var cl=vmEvClass(ev.kind);
         h+='<tr'+(cl?' class="'+(cl==="hit"?"hl-ioc":"")+'"':'')+'><td class="mono">'+esc(ev.when)+'</td><td class="mono'+(cl==="warn"?'" style="color:#e3b341':'')+'">'+esc(ev.ev)+'</td><td>'+esc(ev.kind)+'</td><td'+(ev.via==="vCenter task"?' style="color:#79c0ff"':'')+'>'+esc(ev.via)+'</td><td class="mono muted">'+esc(ev.opID)+'</td><td class="mono">'+esc(ev.detail)+'</td><td class="mono muted">'+esc(ev.src)+'</td></tr>'; }
       h+='</tbody></table></div>'; }
   }
-  $("detBody").innerHTML=h; showEl("detailCard",true); wireFreeze($("detBody"));
+  $("detBody").innerHTML=h; showEl("detailCard",true); wireFreeze($("detBody")); wireCopyCells($("detBody"));
   var sp=$("detBody").getElementsByTagName("span");
   for(i=0;i<sp.length;i++){ if(sp[i].getAttribute("data-vmx")){ sp[i].onclick=function(){ previewVmx(this.getAttribute("data-vmx")); }; } }
   try{ $("detailCard").scrollIntoView(); }catch(e){}
@@ -6045,7 +6687,7 @@ function buildReportHtml(){
   /* ---- indicators ---- */
   h.push(rSection("r-ind","Ransomware / intrusion indicators"+(INDIC.length?(" ("+indHits()+" of "+INDIC.length+" triggered)"):"")));
   if(INDIC.length){ h.push('<table><tr><th>Indicator</th><th>Status</th><th>Evidence</th></tr>');
-    for(i=0;i<INDIC.length;i++){ var ind=INDIC[i]; var cls=ind.status==="hit"?"hit":(ind.status==="na"?"na":"clear"); var lbl=ind.status==="hit"?"TRIGGERED":(ind.status==="na"?"n/a":"clear");
+    for(i=0;i<INDIC.length;i++){ var ind=INDIC[i]; var cls=indCls(ind.status); var lbl=indLbl(ind.status);
       h.push('<tr'+(ind.status==="hit"?' class="rf"':'')+'><td>'+rEsc(ind.name)+'</td><td class="'+cls+'">'+lbl+'</td><td class="muted">'+rEsc(ind.detail)+'</td></tr>'); }
     h.push('</table><p class="muted">n/a means the source was not captured in this bundle. It is never an assurance that the thing is clean.</p>'); }
   else h.push('<p class="muted">No indicator set for this bundle type.</p>');
@@ -6390,7 +7032,7 @@ function buildSecurityHtml(){
     h.push('</table>'); }
   // intrusion indicators
   if(INDIC.length){ h.push('<h2>Ransomware / intrusion indicators ('+indH+' of '+INDIC.length+' triggered)</h2><table><tr><th>Indicator</th><th>Status</th><th>Detail</th></tr>');
-    for(i=0;i<INDIC.length;i++){ var it=INDIC[i]; var icl=it.status==="hit"?"hit":(it.status==="na"?"na":"clear"); h.push('<tr><td>'+rEsc(it.name)+'</td><td class="'+icl+'">'+rEsc(it.status==="hit"?"TRIGGERED":(it.status==="na"?"n/a":"clear"))+'</td><td>'+rEsc(it.detail)+'</td></tr>'); }
+    for(i=0;i<INDIC.length;i++){ var it=INDIC[i]; h.push('<tr><td>'+rEsc(it.name)+'</td><td class="'+indCls(it.status)+'">'+rEsc(indLbl(it.status))+'</td><td>'+rEsc(it.detail)+'</td></tr>'); }
     h.push('</table>'); }
   // full control matrix
   if(SECPOST.length){ h.push('<h2>Security controls</h2><table><tr><th>Group</th><th>Control</th><th>Status</th><th>Detail</th></tr>');
@@ -6448,8 +7090,17 @@ var FLEET=[], FLEETMODE=false, FLEET_CANDS=[], FLEET_I=0, FLEET_HOSTS={}, FLEET_
    bundle and tool version are unchanged - the big speed win for fleet re-runs. */
 function isoNow(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
   return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"T"+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds()); }
-function snapSig(path, archive, mode){ var sz=0, mt=""; try{ if(archive){ sz=fileSize(archive); mt=fileMtime(archive); } }catch(e){}
-  return { path:String(path||""), archive:String(archive||""), size:sz, mtime:mt, mode:String(mode||""), ver:APP_VERSION }; }
+/* v1.17.17 (VS-001): for an ARCHIVE this stats the file, but for an extracted TREE `archive` is ""
+   so it recorded size 0 / mtime "" - and loadSnapshot's guards are `if(sig.size && ...)` /
+   `if(sig.mtime && ...)`, which a 0 and an "" both skip. A tree-mode fleet snapshot was therefore
+   keyed on path + mode + app version ALONE: edit, add or delete any file in an extracted bundle and
+   the saved analysis was still served as current, indefinitely. Now a tree carries the same content
+   fingerprint the source-cache uses. A tree too large to fingerprint yields "" and is never reused. */
+function snapSig(path, archive, mode, root){ var sz=0, mt="", tree="", tcap=false;
+  try{ if(archive){ sz=fileSize(archive); mt=fileMtime(archive); }
+       else if(mode==="tree" && root){ var tf=treeFingerprint(root); tree=tf.sig; tcap=tf.capped; } }catch(e){}
+  return { path:String(path||""), archive:String(archive||""), size:sz, mtime:mt, mode:String(mode||""),
+           tree:tree, treeCapped:!!tcap, ver:APP_VERSION }; }
 function snapPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\snapshot.json"; }
 function saveSnapshot(outdir, sig, snap){
   try{ writeUtf8(snapPath(outdir), JSON.stringify({sig:sig, snap:snap}, null, 1)); }catch(e){ appendLog("snapshot save failed: "+e.message); } }
@@ -6461,6 +7112,13 @@ function loadSnapshot(outdir, sig){
     if(s.mode!==sig.mode) return null;                   // toc vs tree
     if(sig.size && s.size!==sig.size) return null;       // archive size changed -> re-analyze
     if(sig.mtime && s.mtime!==sig.mtime) return null;    // archive rewritten in place (same size) -> re-analyze
+    /* v1.17.17 (VS-001) - extracted trees. Unlike size/mtime above these are NOT guarded on the
+       current value being truthy: an empty fingerprint means "could not be established", and reusing
+       a saved analysis we cannot tie to the tree in front of us is exactly the bug being fixed. */
+    if(sig.mode==="tree"){
+      if(sig.treeCapped || !sig.tree) return null;       // tree too large / unreadable to fingerprint
+      if(String(s.tree||"")!==String(sig.tree)) return null;   // tree content changed -> re-analyze
+    }
     var snap=o.snap; snap.reused=true; return snap;
   }catch(e){ return null; } }
 function fleetBase(){ var b=htaFolder(); if(!b){ try{ b=new ActiveXObject("Scripting.FileSystemObject").GetSpecialFolder(2)+""; }catch(e){ return ""; } } return b+"\\_Processed\\_fleet"; }
@@ -6480,9 +7138,16 @@ function discoverBundles(root){
     var fo; try{ fo=fso.GetFolder(dir); }catch(e){ return; }
     if(looksLikeRoot(dir)){ push(dir); return; }              // extracted tree root = one bundle
     try{ var e=new Enumerator(fo.Files); for(; !e.atEnd(); e.moveNext()){ var f=e.item(); var fn=f.Name+"";
-      if(!/\.(tgz|tar)$/i.test(fn)) continue;
-      var noExt=fn.replace(/\.(tgz|tar)$/i,"");                 // skip an outer wrapper whose extracted sibling folder exists
-      if(fso.FolderExists(dir+"\\"+noExt)) continue;
+      if(!/\.(tar\.gz|tgz|tar|zip)$/i.test(fn)) continue;
+      var noExt=fn.replace(/\.(tar\.gz|tgz|tar|zip)$/i,"");                 // skip an outer wrapper whose extracted sibling folder exists
+      /* v1.17.18: SAY which source won. This choice decides everything downstream, and it is
+         invisible today - working out that a host had been read from its extracted folder rather
+         than from the archive beside it needed a dig through runinfo. It also matters when the two
+         disagree: an extracted tree can be complete while the archive next to it is truncated (or
+         the reverse), and the operator should know which one the findings came from. */
+      if(fso.FolderExists(dir+"\\"+noExt)){
+        appendLog("Fleet: using the extracted folder '"+noExt+"' and SKIPPING the archive '"+fn+"' beside it (same name). Findings for this host come from the folder; if the two could differ, delete or move whichever is not the evidence.");
+        continue; }
       push(f.Path+""); } }catch(e1){}
     try{ var s=new Enumerator(fo.SubFolders); for(; !s.atEnd(); s.moveNext()){ var sub=s.item();
       if(isReparsePoint(sub)) continue;                         // never follow junctions/symlinks (loop / access-fault guard)
@@ -6524,7 +7189,11 @@ function readTocSync(archive){
   catch(e){ trace("  readTocSync: THREW "+(e&&e.message?e.message:e)); }
   gcNow();
   if(!ok){ trace("  readTocSync: NO MEMBERS - host will be skipped (tar rc="+r.rc+"; see the on-screen log)"); return false; }
-  trace("  readTocSync: "+nf(TOC.length)+" members indexed");
+  /* the fleet path captured rc and only TRACED it, so a truncated bundle joined the roster looking
+     exactly like a whole one (v1.17.17, VS-003) */
+  TOC_PARTIAL=tarIncompleteWhy(r.rc, r.log);
+  if(TOC_PARTIAL){ trace("  readTocSync: INCOMPLETE INDEX - "+TOC_PARTIAL); tocPartialReport(nf(TOC.length)); }
+  trace("  readTocSync: "+nf(TOC.length)+" members indexed"+(TOC_PARTIAL?" (INCOMPLETE)":""));
   cacheToc(archive); return true;
 }
 /* THE single per-bundle reset. analyze() used to keep its own shorter copy of this list, and the two
@@ -6532,9 +7201,24 @@ function readTocSync(archive){
    vCenter one left the ESXi host's VIB table rendered under the vCenter's name in the Security tab AND
    in both exported HTML reports (the three render sites gate on VIBS_NOTABLE.length, not on BTYPE).
    Both entry points now call THIS function - a new global belongs here and nowhere else. */
-function resetHostGlobals(){ TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFIX=""; BTYPE=""; NODE={}; INVENTORY=[]; LOGON=[]; SESSIONS=[]; BF=null; RANSOM=null; MAINT=[]; MAINT_TOTAL=0; VMEV=[]; VMEV_SRC=""; VMEV_TOTAL=0; VPXD_HUMANS=[]; VM_MOREF_NAME={}; ACTIONS=[]; TIMELINE=[]; IOCHITS=[]; IOC_SWEEPCAP=""; INDIC=[]; CVES=[]; PERSIST=[]; SPEC=[]; VMS=[]; VCSA_VM_META=null; SECPOST=[]; VIBS=[]; VIBS_NOTABLE=[]; VOBD_STATS=null; ESXUP_EVENTS=[]; NETINFO=null; LOG_TRUNC=[]; VPXD_LINES=null; VPXD_SRCNOTE=""; USERSV=[]; PAM_FINDS=null; ANALYSIS_ERRS=[]; logCacheClear(); }
+/* ---- release the PREVIOUS bundle's rendered tables before parsing the next (v1.17.19) ----------
+   Measured across a session: the app never returned to its starting footprint between analyses -
+   ~220-260 MB persisted, and the large vCenter then peaked at 607 MB on top of that floor rather
+   than the 490 MB it reached from a clean start. The floor is rendered DOM: Logons, Actions and
+   Timeline each render up to ANMAXROWS rows, every cell carrying a long title attribute, and all of
+   it stayed live in the document while the NEXT bundle's tables were being built - two full result
+   sets in memory at once, for no reason, since every one of these is rebuilt after analysis anyway.
+   Emptying them first is free and removes the compounding. */
+function releaseResultDom(){
+  var ids=["tbl","vmsTbl","vmEvTbl","invTbl","specBody","secBody","netBody","detBody","corrBody","fleetTbl","ovMaint"];
+  for(var i=0;i<ids.length;i++){ var el=$(ids[i]); if(el){ try{ el.innerHTML=""; }catch(e){} } }
+  try{ showEl("detailCard",false); }catch(e2){}
+  gcNow();
+}
+function resetHostGlobals(){ TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFIX=""; TOC_PARTIAL=""; TREESIG_CACHE=null; TREESIG_CACHE_KEY=""; CAPPED_ANSI=0; CAPPED_ANSI_FILES=[]; VIEW_BYTES=0; VIEW_QUOTA_HIT=false; BTYPE=""; NODE={}; INVENTORY=[]; LOGON=[]; SESSIONS=[]; BF=null; RANSOM=null; MAINT=[]; MAINT_TOTAL=0; VMEV=[]; VMEV_SRC=""; VMEV_TOTAL=0; VPXD_HUMANS=[]; VM_MOREF_NAME={}; ACTIONS=[]; TIMELINE=[]; IOCHITS=[]; IOC_SWEEPCAP=""; INDIC=[]; CVES=[]; PERSIST=[]; SPEC=[]; VMS=[]; VCSA_VM_META=null; SECPOST=[]; VIBS=[]; VIBS_NOTABLE=[]; VOBD_STATS=null; ESXUP_EVENTS=[]; NETINFO=null; LOG_TRUNC=[]; VPXD_LINES=null; VPXD_SRCNOTE=""; USERSV=[]; PAM_FINDS=null; ANALYSIS_ERRS=[]; logCacheClear(); }
 function processHostSync(path){
   var tp="h"+FLEET_I+" "+baseName(path);
+  touchOutputLock();                     // heartbeat: a long fleet run must not look abandoned
   trace(tp+" | ENTER processHostSync");
   trace(tp+" | resolveBundleDesc (magic-byte sniff)");
   var d=resolveBundleDesc(path); if(!d){ trace(tp+" | resolveBundleDesc -> null (skip)"); return null; }
@@ -6542,8 +7226,15 @@ function processHostSync(path){
   var host=sanitHost(d.host||baseName(path)); if(!host) host="host"+FLEET_I;
   LASTOUTDIR=fleetBase()+"\\"+host; EXDIR=LASTOUTDIR+"\\_extracted"; NODEDIR=LASTOUTDIR+"\\_nodecfg"; ensureDir(LASTOUTDIR);
   trace(tp+" | mode="+MODE+" host="+host+" -> bindSourceCache");
-  bindSourceCache(LASTOUTDIR, (MODE==="tree")?ROOT:ARCHIVE, MODE);   // two same-short-name hosts sharing this folder can no longer feed each other stale extractions
-  var sig=snapSig(path, ARCHIVE, MODE);
+  /* two same-short-name hosts sharing this folder can no longer feed each other stale extractions.
+     v1.17.17: fails closed - a host whose cache cannot be validated is SKIPPED with a logged reason
+     rather than analysed against another capture's files. One bad output folder must not silently
+     contaminate one row of the roster; the fleet continues with the next bundle. */
+  if(!bindSourceCache(LASTOUTDIR, (MODE==="tree")?ROOT:ARCHIVE, MODE)){
+    trace(tp+" | bindSourceCache FAILED (skip - stale cache from another capture could not be cleared)");
+    appendLog("  = "+host+" SKIPPED: cached extractions from a different capture could not be validated or removed in "+LASTOUTDIR+".");
+    return null; }
+  var sig=snapSig(path, ARCHIVE, MODE, ROOT);
   if(FLEET_REUSE){ var cached=loadSnapshot(LASTOUTDIR, sig);
     if(cached){ trace(tp+" | reused cached snapshot"); appendLog("  = "+host+" reused saved analysis from "+(cached.analyzedAt||"?")+" (source unchanged, skipped re-parse)"); return cached; } }
   $("hostName").value=host;
@@ -6566,7 +7257,14 @@ function processHostSync(path){
   if(ANALYSIS_ERRS.length) appendLog("  = "+host+": "+ANALYSIS_ERRS.length+" stage(s) failed ("+ANALYSIS_ERRS.join(", ")+")");
   var dispHost=betterHost(host, NODE.host);   // roster shows the real FQDN parsed from bundle content, not the wrapper label
   trace(tp+" | writeRunInfo + snapshotHost");
-  try{ writeRunInfo(LASTOUTDIR, path); writeAnalysisOutputs(); }catch(e){}
+  /* v1.17.22: amendRunInfo() was called ONLY from the single-bundle tail, so a fleet host's runinfo
+     never received any of the post-analysis provenance - logsTruncated, indexPartial, indexVerified,
+     headReadsAnsi, parserFailures, vpxdSet. Every completeness disclosure added since v1.17.17 was
+     therefore absent from the on-disk record in the mode most likely to be used for a real
+     multi-host case, while being present for the same bundle analysed on its own. The roster still
+     showed the PARTIAL chip (that rides the snapshot, not runinfo), so this was invisible on screen -
+     it only showed up reading the JSON. */
+  try{ writeRunInfo(LASTOUTDIR, path); amendRunInfo(); writeAnalysisOutputs(); }catch(e){}
   var snap=snapshotHost(dispHost, path);
   try{ saveSnapshot(LASTOUTDIR, sig, snap); }catch(e){}
   logCacheClear(); VPXD_LINES=null; gcNow();   // snapshotHost (collectOpTasks/collectManagedHosts) was the last consumer - free before the next host
@@ -6575,10 +7273,19 @@ function processHostSync(path){
 }
 function distinct(arr){ var m={},o=[]; for(var i=0;i<arr.length;i++){ var k=lc(arr[i]); if(k&&!m["#"+k]){ m["#"+k]=1; o.push(arr[i]); } } return o; }
 /* vSAN sub-cluster identity (groups hosts into clusters; also gives member hostnames) */
+/* v1.17.14: the "is vSAN on?" test used an UNANCHORED /Enabled:\s*false/, which reads any line
+   ENDING in "Enabled: false" - and ESXi 9 added two trailing fields to localcli vsan cluster get:
+     vSAN ESA Enabled: true
+     vSAN Max Client Network Enabled: false     <- this
+   so every 9.x cluster member was declared vSAN-disabled and fell through to "standalone" on the
+   fleet roster, while 7.0.3 hosts (whose output stops at "Mode: REGULAR") grouped correctly. The
+   flag we want is the top-level `Enabled:` field, so anchor it to the start of its own line.
+   Lesson: a sub-string test against command output is a promise about FUTURE output too - a vendor
+   only has to append a field for it to start matching the wrong line. */
 function extractCluster(){
   if(BTYPE!=="esxi") return {uuid:"", members:[]};
   var t=readMember("commands/localcli_vsan-cluster-get.txt");
-  if(!trimStr(t) || /Enabled:\s*false/i.test(t)) return {uuid:"", members:[]};
+  if(!trimStr(t) || /^[ \t]*Enabled:[ \t]*false/im.test(t)) return {uuid:"", members:[]};
   var uuid=(t.match(/Sub-Cluster UUID:\s*(\S+)/i)||[])[1]||"";
   var mh=(t.match(/Sub-Cluster Member HostNames:\s*(.+)/i)||[])[1]||"", members=[];
   if(mh){ var p=mh.split(/,\s*/); for(var i=0;i<p.length;i++){ var s=trimStr(p[i]); if(s) members.push(s); } }
@@ -6598,22 +7305,55 @@ function collectOpTasks(){
   return out;
 }
 function indicNames(){ var o=[]; for(var i=0;i<INDIC.length;i++) if(INDIC[i].status==="hit") o.push(INDIC[i].name); return o; }
+/* This host's link to its vCenter, read from vpxa.log in ONE pass (v1.17.16):
+     .moref    - the MoRef vCenter assigned this host. vpxa is the host-side half of the vCenter
+                 connection and stamps it on its own opIDs (HostSync-host-N-…), so an ESXi bundle
+                 knows the identity vCenter files it under even with no vCenter bundle present.
+     .serverIp - the vCenter this host actually answers to ("Server IP:" / "Manager IP:").
+   BOTH are needed, and this is the correction to v1.17.14's MoRef join: a MoRef is unique only
+   WITHIN a vCenter instance - it is a per-instance sequence number, so low numbers collide freely
+   across unrelated vCenters (in the reference fleet two vCenters in entirely different domains each
+   had the same low-numbered MoRef). Matching MoRefs alone would therefore have tied a vCenter to a cluster it has
+   nothing to do with - a confident, wrong, cross-environment attribution. The MoRef says WHICH host
+   only once you know WHICH vCenter, so it MUST be scoped by the vCenter's own identity. */
+function esxiVcLink(){
+  var out={moref:"", serverIp:""};
+  if(BTYPE!=="esxi") return out;
+  var rel=resolveLog(["var/run/log/vpxa.log","scratch/log/vpxa.log","var/log/vpxa.log"]); if(!rel) return out;
+  var lines=logLines(rel), cnt={}, bn=0, ipc={}, ibn=0, i, m;
+  for(i=0;i<lines.length && i<30000;i++){ var ln=lines[i];
+    m=ln.match(/\bhost-(\d+)\b/);
+    if(m){ var k="host-"+m[1]; cnt[k]=(cnt[k]||0)+1; if(cnt[k]>bn){ bn=cnt[k]; out.moref=k; } }
+    m=ln.match(/\b(?:Server|Manager) IP:\s*(\d{1,3}(?:\.\d{1,3}){3})/i);
+    if(m && !/^127\./.test(m[1])){ ipc[m[1]]=(ipc[m[1]]||0)+1; if(ipc[m[1]]>ibn){ ibn=ipc[m[1]]; out.serverIp=m[1]; } } }
+  /* vpxa is host-local, so one MoRef dominates its log - but a single stray mention is not an
+     identity, and asserting the wrong one would put a host in the wrong cluster. */
+  if(bn<3) out.moref="";
+  return out;
+}
 /* vCenter-managed ESXi hosts (host-N,<fqdn>) + guest IPs (vm [name] (moId:vm-N) ... ipAddress) from vpxd */
+/* v1.17.14: the FQDN capture below is not enough on its own. vpxd writes `host-N,<endpoint>` where the
+   endpoint is however the host was REGISTERED - and a host added by IP logs `host-N,<ip>`,
+   which no TLD pattern can match. That is why a vCenter whose hosts were all added by IP had an EMPTY
+   managed-host list and could not be tied to its own cluster. The MoRefs are harvested separately and
+   unconditionally, because `host-N` is the identity vpxd and vpxa actually agree on. */
 function collectManagedHosts(){
-  if(BTYPE!=="vcsa") return {hosts:[], guestIp:{}};
-  var lines=vpxdLines(); if(!lines.length) return {hosts:[], guestIp:{}};
-  var seenH={}, hosts=[], gip={}, i, m;
+  if(BTYPE!=="vcsa") return {hosts:[], guestIp:{}, morefs:[]};
+  var lines=vpxdLines(); if(!lines.length) return {hosts:[], guestIp:{}, morefs:[]};
+  var seenH={}, hosts=[], gip={}, i, m, seenM={}, morefs=[];
+  var mre=/\bhost-(\d+),/ig;                    // the MoRef, however the host is registered
   var hre=/host-\d+,([a-z0-9][a-z0-9.\-]+\.(?:local|lan|com|net|org))/ig;
   var g1=/vm \[([^\]]+)\][^\[\]]{0,80}?\[:?(\d{1,3}(?:\.\d{1,3}){3})\]/ig;   // vm [name] ... [ip]
   var g2=/\[:?(\d{1,3}(?:\.\d{1,3}){3})\][^\[\]]{0,60}?vm \[([^\]]+)\]/ig;    // [ip] ... vm [name]  (conflict lines)
   function addIp(nm,ip){ if(ip==="0.0.0.0"||/^127\.|^169\.254\./.test(ip)) return; var k=lc(nm); if(k&&!gip[k]) gip[k]=ip; }
   for(i=0;i<lines.length;i++){ var ln=lines[i];
     while((m=hre.exec(ln))){ var fq=lc(m[1]); if(!seenH[fq]){ seenH[fq]=1; hosts.push(m[1]); } }
+    mre.lastIndex=0; while((m=mre.exec(ln))){ var mo="host-"+m[1]; if(!seenM[mo]){ seenM[mo]=1; morefs.push(mo); } }
     g1.lastIndex=0; while((m=g1.exec(ln))) addIp(m[1],m[2]);
     g2.lastIndex=0; while((m=g2.exec(ln))) addIp(m[2],m[1]);
-    if(hosts.length>400) break;
+    if(hosts.length>400 || morefs.length>400) break;
   }
-  return {hosts:hosts, guestIp:gip};
+  return {hosts:hosts, guestIp:gip, morefs:morefs};
 }
 function flaggedEvents(){ var o=[], i;
   for(i=0;i<LOGON.length;i++){ var l=LOGON[i]; if(l.score>=3) o.push({when:l.when,kind:"logon",detail:l.result+" "+l.user+" from "+(l.ip||"local"),score:l.score,ep:l.epoch}); }
@@ -6628,9 +7368,11 @@ function snapshotHost(host, path){
   var cveFlag=0; for(i=0;i<CVES.length;i++){ if(CVES[i].verdict==="exposed"||CVES[i].verdict==="review") cveFlag++; }
   var risk = indHits()*3 + persistHits()*2 + lf + af + IOCHITS.length*2 + ext.n;
   var vmRun=0; for(i=0;i<VMS.length;i++) if(VMS[i].running) vmRun++;
-  var cl=extractCluster(); var mh=collectManagedHosts();
+  var cl=extractCluster(); var mh=collectManagedHosts(); var vcl=esxiVcLink();
   return { host:host, type:typeLabel(), btype:BTYPE, version:NODE.version||"", build:NODE.build||"", serial:NODE.serial||"",
     vmCount:VMS.length, vmRunning:vmRun, managedHosts:mh.hosts, guestIp:mh.guestIp,
+    managedMorefs:mh.morefs||[], hostMoRef:vcl.moref, vcServerIp:vcl.serverIp, mgmtIp:NODE.mgmtIp||"",
+    indexPartial:TOC_PARTIAL||"", indexTree:(MODE==="tree"),
     keyPresent:present, keyTotal:INVENTORY.length, keyMiss:missN,
     logons:LOGON.length, logonFlagged:lf, logonExt:ext.n, extIps:ext.ips,
     actions:ACTIONS.length, actFlagged:af, persistFlagged:persistHits(), indicHits:indHits(), indicList:indicNames(),
@@ -6641,12 +7383,12 @@ function snapshotHost(host, path){
 /* highlight Analyze vs Triage-fleet based on what the Bundle field points at:
    a single archive / single-bundle folder -> Analyze blue; a folder holding 2+ bundles -> Fleet blue. */
 function folderHasBundle(dir){ if(looksLikeRoot(dir)) return true;
-  try{ var fso=new ActiveXObject("Scripting.FileSystemObject"), e=new Enumerator(fso.GetFolder(dir).Files); for(;!e.atEnd();e.moveNext()){ if(/\.(tgz|tar)$/i.test(e.item().Name+"")) return true; } }catch(x){} return false; }
+  try{ var fso=new ActiveXObject("Scripting.FileSystemObject"), e=new Enumerator(fso.GetFolder(dir).Files); for(;!e.atEnd();e.moveNext()){ if(/\.(tar\.gz|tgz|tar|zip)$/i.test(e.item().Name+"")) return true; } }catch(x){} return false; }
 function countBundlesShallow(dir){
   if(looksLikeRoot(dir)) return 1;
   var fso=new ActiveXObject("Scripting.FileSystemObject"), n=0;
-  try{ var e=new Enumerator(fso.GetFolder(dir).Files); for(;!e.atEnd();e.moveNext()){ var fn=e.item().Name+""; if(!/\.(tgz|tar)$/i.test(fn)) continue;
-    if(fso.FolderExists(dir+"\\"+fn.replace(/\.(tgz|tar)$/i,""))) continue; n++; } }catch(e1){}
+  try{ var e=new Enumerator(fso.GetFolder(dir).Files); for(;!e.atEnd();e.moveNext()){ var fn=e.item().Name+""; if(!/\.(tar\.gz|tgz|tar|zip)$/i.test(fn)) continue;
+    if(fso.FolderExists(dir+"\\"+fn.replace(/\.(tar\.gz|tgz|tar|zip)$/i,""))) continue; n++; } }catch(e1){}
   try{ var s=new Enumerator(fso.GetFolder(dir).SubFolders); for(;!s.atEnd();s.moveNext()){ var sp=s.item().Path+""; if(SKIP_DIRS[lc(baseName(sp))]) continue; if(folderHasBundle(sp)) n++; } }catch(e2){}
   return n;
 }
@@ -6670,10 +7412,16 @@ function triageFleet(){
   setStatus("Fleet: scanning "+root+" for bundles…","muted");
   FLEET=[]; FLEET_HOSTS={}; FLEET_I=0;
   ensureDir(fleetBase()); traceInit("fleet"); procStart("Fleet Scan");   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
+  /* v1.17.21 (P5): one lock for the whole fleet base - a fleet run owns every _fleet\<host> under it,
+     so a second instance scanning the same folder would fight it host for host. */
+  if(!acquireOutputLock(fleetBase())){ procStop(false); return; }
   trace("triageFleet start; root="+root);
   try{ FLEET_CANDS=discoverBundles(root); }
-  catch(eDisc){ FLEET_CANDS=[]; setStatus("Fleet discovery failed while scanning "+root+": "+(eDisc&&eDisc.message?eDisc.message:eDisc)+" - try pointing at the folder that directly holds the bundles.","err"); appendLog("Fleet discovery error: "+(eDisc&&eDisc.message?eDisc.message:eDisc)); return; }
-  if(!FLEET_CANDS.length){ setStatus("No bundle archives or extracted bundle folders found under that folder.","err"); return; }
+  /* v1.17.17 (VS-013): procStart() has already begun the on-screen timer, so every early exit below
+     must stop it. These two returns did not, leaving a failed or empty scan counting up as though it
+     were still working - the one state a progress indicator must never show. */
+  catch(eDisc){ FLEET_CANDS=[]; procStop(false); setStatus("Fleet discovery failed while scanning "+root+": "+(eDisc&&eDisc.message?eDisc.message:eDisc)+" - try pointing at the folder that directly holds the bundles.","err"); appendLog("Fleet discovery error: "+(eDisc&&eDisc.message?eDisc.message:eDisc)); return; }
+  if(!FLEET_CANDS.length){ procStop(false); setStatus("No bundle archives or extracted bundle folders found under that folder.","err"); return; }
   appendLog("Discovered "+FLEET_CANDS.length+" candidate path(s); processing…");
   ensureDir(fleetBase());
   BUSY=true; $("fleetBtn").disabled=true; $("procBtn").disabled=true; FLEETMODE=true;
@@ -6709,12 +7457,44 @@ function assignClusters(){
   for(i=0;i<FLEET.length;i++){ var r=FLEET[i];
     if(r.clusterUuid && map[r.clusterUuid]) r.clusterLabel=map[r.clusterUuid]+" · vSAN "+r.clusterUuid.substring(0,8);
     else r.clusterLabel = (r.btype==="vcsa")?"vCenter":"standalone"; }
-  // tie a vCenter to a cluster: (1) shared task opIDs, or (2) it manages a cluster member host
+  /* tie a vCenter to a cluster: (1) shared task opIDs, (2) it manages a cluster member host by NAME,
+     or (3) v1.17.14 - the host MoRef join. (1) and (2) both failed on a real fleet: the retained vpxd
+     and vpxa windows did not overlap, so no opID was shared, and the hosts were registered by IP, so
+     vpxd never wrote an FQDN to match against. But vpxd writes `host-N,<ip>` and that host's
+     own vpxa.log stamps `HostSync-host-N-…`, so both sides agree on the MoRef even when they agree
+     on nothing else. It is also the strongest of the three: a MoRef is vCenter's own primary key. */
   for(i=0;i<FLEET.length;i++){ var vc=FLEET[i]; if(vc.btype!=="vcsa") continue;
     for(j=0;j<FLEET.length;j++){ var e=FLEET[j]; if(e.btype!=="esxi"||!e.clusterUuid) continue;
-      if(shareOp(vc.opTasks,e.opTasks) || hostSetsIntersect(vc.managedHosts, e.clusterMembers) || hostSetsIntersect(vc.managedHosts,[e.host])){
+      if(shareOp(vc.opTasks,e.opTasks) || hostSetsIntersect(vc.managedHosts, e.clusterMembers)
+         || hostSetsIntersect(vc.managedHosts,[e.host]) || vcManagesEsxi(vc, e)){
         vc.clusterLabel=(map[e.clusterUuid]||"Cluster")+" · vCenter"; vc.clusterUuid=e.clusterUuid; break; } } }
+  /* colour index per cluster, assigned once here so the roster, the correlation board and a vCenter
+     tied to a cluster all render the SAME colour for the same cluster. Hosts with no cluster keep -1
+     (neutral chip) - "standalone" is an absence, not a group, and must not look like one. */
+  var ci={}, cn=0;
+  for(i=0;i<FLEET.length;i++){ var u1=FLEET[i].clusterUuid; if(u1 && ci[u1]==null){ ci[u1]=cn++; } }
+  for(i=0;i<FLEET.length;i++){ var u2=FLEET[i].clusterUuid; FLEET[i].clusterIdx=(u2&&ci[u2]!=null)?ci[u2]:-1; }
 }
+/* the ESXi bundle's own MoRef appears in the vCenter's managed set. EXACT comparison, never a prefix
+   or substring test - a shorter MoRef must not match a longer one that begins with it, or hosts
+   land in the wrong cluster. */
+function morefManaged(list, mo){ if(!list||!list.length||!mo) return false;
+  for(var i=0;i<list.length;i++) if(lc(list[i])===lc(mo)) return true; return false; }
+/* Does THIS vCenter manage THIS ESXi host? (v1.17.16)
+   The scope test comes FIRST and is mandatory: the host's vpxa names the vCenter it answers to, and
+   that must be the vCenter whose bundle this is. Only then does the MoRef mean anything - see
+   esxiVcLink() for why an unscoped MoRef match is a cross-environment false positive waiting to
+   happen. If either side's identity is missing we return false: no tie is a visible gap the analyst
+   can act on, a wrong tie is a wrong conclusion they cannot see. */
+function vcManagesEsxi(vc, e){
+  if(!vc || !e) return false;
+  var vip=lc(trimStr(vc.mgmtIp||"")), sip=lc(trimStr(e.vcServerIp||""));
+  if(!vip || !sip || vip!==sip) return false;            // different vCenter, or identity unknown
+  if(!e.hostMoRef) return true;                          // scoped by IP alone - already proves management
+  return morefManaged(vc.managedMorefs, e.hostMoRef);    // ...and this host is in its managed set
+}
+/* CSS class for a cluster chip - identity colour, or a neutral chip when there is no cluster */
+function cluCls(idx){ return (idx==null||idx<0) ? "tag info" : ("tag clu"+(idx%6)); }
 function baseHost(h){ h=lc(trimStr(h||"")); var d=h.indexOf("."); return d>0?h.substring(0,d):h; }
 function hostSetsIntersect(a,b){ if(!a||!b) return false; var s={}; for(var i=0;i<a.length;i++) s[baseHost(a[i])]=1;
   for(var j=0;j<b.length;j++){ if(s[baseHost(b[j])]) return true; } return false; }
@@ -6736,12 +7516,26 @@ function fmtAnalyzed(r){ var t=r.analyzedAt?isoShort(r.analyzedAt):"-";
 function renderRoster(){
   var q=lc(trimStr($("fq").value||"")); var rows=[];
   for(var i=0;i<FLEET.length;i++){ var r=FLEET[i]; if(q && (r.host+" "+r.type+" "+r.build+" "+(r.serial||"")).toLowerCase().indexOf(q)<0) continue; rows.push(r); }
-  var h='<thead><tr><th title="The host each bundle belongs to, from the bundle content (not the folder name). Click a row to drill into that host&#39;s full triage.">Host</th><th title="vSAN sub-cluster the host belongs to, so cluster-mates sit together. A vCenter is tied to a cluster when it shares task opIDs with, or manages, that cluster&#39;s hosts.">Cluster</th><th title="ESXi (vm-support) or vCenter (vc-support) - detected from the bundle content, which decides the whole analysis surface.">Type</th><th title="Product version and build, used for the CVE-exposure comparison.">Version / build</th><th title="Hardware serial / service tag, for tying a host to the physical asset.">Serial / service tag</th><th title="VMs found for this host (running in brackets). ESXi: from .vmx. vCenter: reconstructed from logs.">VMs</th><th title="Curated key artifacts present vs expected. A low ratio means a thin bundle - findings may be absent simply because the evidence was not collected.">Key files</th><th title="Total logons parsed, and how many scored 3+ (external IP, failure clusters, privileged). External source IPs are counted separately in the risk score.">Logons (flagged)</th><th title="Total actions parsed, and how many scored 3+ (suspicious shell commands, destructive/authz vCenter tasks).">Actions (flagged)</th><th title="Persistence &amp; tampering checks that came back suspect/review for this host.">Persist</th><th title="Intrusion / ransomware indicators triggered on this host.">Indicators</th><th title="Known-CVE exposure verdicts needing attention (advisory - confirm against the VMSA).">CVE</th><th title="Composite sort key: indicators*3 + persistence*2 + flagged logons + flagged actions + IOC*2 + external logons. A ranking aid to order the work, NOT a verdict.">Risk</th><th title="When this host was last processed. Re-runs reuse the saved analysis from _Processed when the source bundle is unchanged (untick &quot;reuse cached&quot; to force a fresh pass).">Analyzed</th></tr></thead><tbody>';
+  var h='<thead><tr><th title="The host each bundle belongs to, from the bundle content (not the folder name). Click a row to drill into that host&#39;s full triage.">Host</th><th title="vSAN sub-cluster the host belongs to, so cluster-mates sit together. Each cluster has its own chip COLOUR - same colour, same cluster (identity only, it carries no severity). A vCenter is tied to a cluster, and takes its colour, when it shares a task opID with one of that cluster&#39;s hosts, manages one by name, or manages one by host MoRef (vpxd&#39;s host-N joined to that host&#39;s own vpxa.log) - the MoRef join is the one that works when hosts were registered by IP. &#39;standalone&#39; means no vSAN sub-cluster was found; a plain &#39;vCenter&#39; chip means no cluster in THIS fleet could be tied to it.">Cluster</th><th title="ESXi (vm-support) or vCenter (vc-support) - detected from the bundle content, which decides the whole analysis surface.">Type</th><th title="Product version and build, used for the CVE-exposure comparison.">Version / build</th><th title="Hardware serial / service tag, for tying a host to the physical asset.">Serial / service tag</th><th title="VMs found for this host (running in brackets). ESXi: from .vmx. vCenter: reconstructed from logs.">VMs</th><th title="Curated key artifacts present vs expected. A low ratio means a thin bundle - findings may be absent simply because the evidence was not collected.">Key files</th><th title="Total logons parsed, and how many scored 3+ (external IP, failure clusters, privileged). External source IPs are counted separately in the risk score.">Logons (flagged)</th><th title="Total actions parsed, and how many scored 3+ (suspicious shell commands, destructive/authz vCenter tasks).">Actions (flagged)</th><th title="Persistence &amp; tampering checks that came back suspect/review for this host.">Persist</th><th title="Intrusion / ransomware indicators triggered on this host.">Indicators</th><th title="Known-CVE exposure verdicts needing attention (advisory - confirm against the VMSA).">CVE</th><th title="Composite sort key: indicators*3 + persistence*2 + flagged logons + flagged actions + IOC*2 + external logons. A ranking aid to order the work, NOT a verdict.">Risk</th><th title="When this host was last processed. Re-runs reuse the saved analysis from _Processed when the source bundle is unchanged (untick &quot;reuse cached&quot; to force a fresh pass).">Analyzed</th></tr></thead><tbody>';
   if(!rows.length) h+='<tr><td colspan="14" class="muted">No hosts yet.</td></tr>';
   for(i=0;i<rows.length;i++){ var r=rows[i]; var rc=r.risk>=8?"row-flag":(r.risk>=3?"row-warn":"");
-    var clCls = (r.clusterLabel&&r.clusterLabel.indexOf("Cluster")===0)?"tag cfg":(r.clusterLabel==="standalone"?"muted":"tag info");
+    /* v1.17.14: colour BY CLUSTER, not by "is it a cluster" - every chip used to be the same blue, so
+       telling two clusters apart meant reading the letter. "standalone" stays muted text (an absence,
+       not a group); an untied vCenter keeps the neutral chip. */
+    var clCls = (r.clusterLabel==="standalone") ? "muted" : cluCls(r.clusterIdx);
+    var clTip = (r.clusterIdx!=null && r.clusterIdx>=0)
+      ? ("vSAN sub-cluster "+(r.clusterUuid||"")+(r.btype==="vcsa"?" - this vCenter manages that cluster (tied by shared task opID, managed-host name, or host MoRef)":" - hosts sharing this colour are cluster-mates"))
+      : (r.btype==="vcsa" ? "vCenter - not tied to any cluster in this fleet. It manages hosts whose bundles are not here, or its retained logs name none of the hosts present."
+                          : "No vSAN sub-cluster: vSAN is disabled on this host, or the bundle carries no localcli vsan cluster get output.");
     h+='<tr class="'+rc+'" data-h="'+i+'" style="cursor:pointer" title="Open full triage for '+esc(r.host)+'">'
-      +'<td><b>'+esc(r.host)+'</b></td><td class="mono"><span class="'+clCls+'">'+esc(r.clusterLabel||"-")+'</span></td><td>'+esc(r.type)+'</td><td class="mono muted">'+esc((r.version?r.version+" ":"")+r.build)+'</td>'
+      +'<td><b>'+esc(r.host)+'</b>'
+        /* v1.17.17: a truncated bundle used to join the roster looking exactly like a whole one. Every
+           "absent" count in this row is then a floor, not a fact - say so on the row itself. */
+        +(r.indexPartial?(' <span class="tag ioc" title="'+esc("INCOMPLETE ARCHIVE INDEX - "+r.indexPartial+". Members past the damage were never listed, so the key-file, VM and log counts on this row are LOWER BOUNDS and any 'absent' artifact may simply be unreadable. Re-copy this bundle from source and re-scan before reporting on it.")+'">PARTIAL</span>'):'')
+        /* v1.17.21 (P4): a tree cannot be proven complete the way an archive can - say so rather than
+           let an unverifiable source sit on the roster looking identical to a verified one. */
+        +((!r.indexPartial && r.indexTree)?(' <span class="tag cmd" title="'+esc("Read from an EXTRACTED FOLDER, not an archive. There is no manifest to verify it against, so completeness cannot be established - a tree unpacked from a truncated archive looks identical to a complete one. Not a finding; a limit on what this row can promise. Point the scan at the original archive if you need the completeness check.")+'">tree</span>'):'')
+      +'</td><td class="mono"><span class="'+clCls+'" title="'+esc(clTip)+'">'+esc(r.clusterLabel||"-")+'</span></td><td>'+esc(r.type)+'</td><td class="mono muted">'+esc((r.version?r.version+" ":"")+r.build)+'</td>'
       +'<td class="mono">'+(r.serial?esc(r.serial):'<span class="muted">-</span>')+'</td>'
       +'<td class="mono">'+(r.vmCount!=null?(r.vmCount+(r.vmRunning?(' <span class="muted">('+r.vmRunning+' run)</span>'):'')):'-')+'</td>'
       +'<td class="mono">'+r.keyPresent+'/'+r.keyTotal+(r.keyMiss?(' <span class="pkey">'+r.keyMiss+' miss</span>'):'')+'</td>'
@@ -6817,7 +7611,7 @@ function correlate(){
 function arrIndex(a,v){ for(var i=0;i<a.length;i++) if(a[i]===v) return i; return -1; }
 function clusterGroups(){
   var g={}, order=[]; for(var i=0;i<FLEET.length;i++){ var r=FLEET[i]; var key=r.clusterUuid||("~"+r.host);
-    if(!g[key]){ g[key]={label:r.clusterLabel||"standalone", uuid:r.clusterUuid, hosts:[], vc:[], members:{}}; order.push(key); }
+    if(!g[key]){ g[key]={label:r.clusterLabel||"standalone", uuid:r.clusterUuid, idx:(r.clusterIdx==null?-1:r.clusterIdx), hosts:[], vc:[], members:{}}; order.push(key); }
     if(r.btype==="vcsa") g[key].vc.push(r.host); else g[key].hosts.push(r.host);
     for(var m=0;m<(r.clusterMembers||[]).length;m++) g[key].members[lc(r.clusterMembers[m])]=r.clusterMembers[m]; }
   var out=[]; for(var o=0;o<order.length;o++) out.push(g[order[o]]); return out;
@@ -6831,7 +7625,8 @@ function renderCorrelation(){
   h+='<table><thead><tr><th title="vSAN sub-cluster identified across the fleet.">Cluster</th><th title="The vSAN sub-cluster UUID - also the datastore UUID in /vmfs/volumes/vsan:&lt;uuid&gt;.">vSAN UUID</th><th title="Cluster members whose bundle you actually have.">Hosts present</th><th title="The vCenter managing this cluster, where one is in the fleet.">vCenter</th><th title="Hosts this cluster claims as members but whose bundles are MISSING - blind spots in the collection, and the first thing to go and collect.">Members not in fleet</th></tr></thead><tbody>';
   for(i=0;i<groups.length;i++){ var g=groups[i]; var present={}; for(var p=0;p<g.hosts.length;p++) present[lc(g.hosts[p])]=1;
     var missing=[]; for(key in g.members){ if(g.members.hasOwnProperty(key) && !present[key] && !present[key.split(".")[0]]){ var mn=g.members[key]; var found=false; for(var pp=0;pp<g.hosts.length;pp++){ if(lc(g.hosts[pp]).indexOf(key.split(".")[0])===0){ found=true; break; } } if(!found) missing.push(mn); } }
-    h+='<tr><td><b>'+esc(g.label)+'</b></td><td class="mono muted">'+esc(g.uuid||"-")+'</td><td class="mono">'+esc(g.hosts.join(", ")||"-")+'</td><td class="mono">'+esc(g.vc.join(", ")||"-")+'</td><td class="mono muted" title="'+esc(missing.join(", "))+'">'+(missing.length?(nf(missing.length)+": "+esc(trunc(missing.join(", "),80))):"-")+'</td></tr>'; }
+    /* same colour as the roster chip for the same cluster - the two boards must not disagree */
+    h+='<tr><td><span class="'+cluCls(g.idx)+'">'+esc(g.label)+'</span></td><td class="mono muted">'+esc(g.uuid||"-")+'</td><td class="mono">'+esc(g.hosts.join(", ")||"-")+'</td><td class="mono">'+esc(g.vc.join(", ")||"-")+'</td><td class="mono muted" title="'+esc(missing.join(", "))+'">'+(missing.length?(nf(missing.length)+": "+esc(trunc(missing.join(", "),80))):"-")+'</td></tr>'; }
   h+='</tbody></table></div>';
   // shared source IPs
   h+=corrPanel("Source IPs across hosts","external login source IPs; >1 host = possible lateral movement / shared attacker infra");
@@ -7010,11 +7805,18 @@ function renderOverview(){
 /* Owns the visibility of its own card: analysis finishing calls render() (NOT setTab), so if the user is
    already sitting on the Security tab when it completes, setTab's showEl never re-runs - deciding here
    means the panel can't end up populated-but-hidden. */
+/* ONE label + class for an indicator status, used by the live panel AND both report writers (v1.17.16).
+   Three sites carried three copies of the same ternary and all three had to be edited to change a word -
+   the exact shape that let the VIB table drift between render sites. CLEAR is uppercase to match the
+   Security-posture panel directly below it, which already renders PASS / WARN / REVIEW uppercase;
+   "n/a" stays lowercase in both, because it is an absence of a verdict, not a verdict. */
+function indLbl(st){ return st==="hit" ? "TRIGGERED" : (st==="na" ? "n/a" : "CLEAR"); }
+function indCls(st){ return st==="hit" ? "hit" : (st==="na" ? "na" : "clear"); }
 function renderIndicators(){
   if(!ANALYZED || !INDIC.length){ $("ovIndic").innerHTML=""; showEl("secIndicCard", false); return; }
   showEl("secIndicCard", TAB==="sec");
   var h='<div class="panel"><h4>Intrusion / ransomware indicators <span class="sub">- '+indHits()+' of '+INDIC.length+' triggered'+(BTYPE==="esxi"?" (ESXi kill-chain)":"")+'</span></h4>';
-  for(var i=0;i<INDIC.length;i++){ var it=INDIC[i]; var dc=it.status==="hit"?"hit":(it.status==="na"?"na":""); var sc=it.status==="hit"?"hit":(it.status==="na"?"na":"clear"); var lbl=it.status==="hit"?"TRIGGERED":(it.status==="na"?"n/a":"clear");
+  for(var i=0;i<INDIC.length;i++){ var it=INDIC[i]; var dc=it.status==="hit"?"hit":(it.status==="na"?"na":""); var sc=indCls(it.status); var lbl=indLbl(it.status);
     var tt=indTip(it);
     h+='<div class="ind"'+(tt?(' title="'+esc(tt)+'"'):'')+'><span class="dot '+dc+'"></span><span class="nm">'+esc(it.name)+'</span><span class="st '+sc+'">'+lbl+'</span><span class="dt">'+esc(it.detail)+'</span></div>'; }
   h+='</div>'; $("ovIndic").innerHTML=h;
@@ -7616,6 +8418,18 @@ function viewablePath(src){
   var outName=(sub||baseName(src)).replace(/\.(gz|zst)$/i,""); if(!/\.\w+$/.test(outName)) outName+=".log";
   var dst=viewDir+"\\"+outName; ensureDir(parentDir(dst));
   if(fileExists(dst)) return dst;
+  /* v1.17.21 (P3): decompression had no output cap, no ratio limit and no per-run quota - a bundle
+     could expand to whatever the disk allowed. Legitimate captures already reach a few hundred MB
+     (the reference vCenter's _view is ~271 MB of vpxd rotations), so the quota is generous; it exists
+     to stop a zip-bomb-shaped member, not to second-guess a real capture. Ratio is checked AFTER the
+     fact because neither gzip nor zstd is asked for a size up front - but the file is deleted and the
+     run continues without it, which is fail-closed for that member and disclosed. */
+  if(VIEW_BYTES>VIEW_BUDGET){
+    var qn="decompression quota of "+fmtSize(VIEW_BUDGET)+" reached - "+baseName(src)+" was NOT decompressed, so anything in it is absent from this analysis";
+    if(!VIEW_QUOTA_HIT){ VIEW_QUOTA_HIT=true; LOG_TRUNC.push(qn); setStatus("Decompression quota reached - some logs were not expanded. Findings are incomplete; see the log.","err"); }
+    appendLog("  "+qn); return "";
+  }
+  var srcSz=0; try{ srcSz=fileSize(src); }catch(eS){}
   if(/\.gz$/.test(low)){
     var srcq=src.replace(/'/g,"''"), dstq=dst.replace(/'/g,"''");
     var cmd="$i=[IO.File]::OpenRead('"+srcq+"');$g=New-Object System.IO.Compression.GZipStream($i,[System.IO.Compression.CompressionMode]::Decompress);$o=[IO.File]::Create('"+dstq+"');$g.CopyTo($o);$o.Dispose();$g.Dispose();$i.Dispose()";
@@ -7624,7 +8438,21 @@ function viewablePath(src){
     if(!ensureZstd()) return "";
     runBat(['"'+batEsc(ZSTD)+'" -d -f "'+batEsc(src)+'" -o "'+batEsc(dst)+'" > "__LOG__" 2>&1'], false);
   }
-  return fileExists(dst)?dst:"";
+  if(!fileExists(dst)) return "";
+  var outSz=0; try{ outSz=fileSize(dst); }catch(eO){}
+  /* a single member that expands beyond the whole-run budget, or at an implausible ratio, is treated
+     as hostile: removed, disclosed, and the run continues without it rather than filling the disk */
+  if(outSz>VIEW_MEMBER_MAX || (srcSz>0 && outSz/srcSz>VIEW_MAX_RATIO && outSz>VIEW_RATIO_FLOOR)){
+    var why = outSz>VIEW_MEMBER_MAX
+      ? (baseName(src)+" expanded to "+fmtSize(outSz)+", over the "+fmtSize(VIEW_MEMBER_MAX)+" per-member limit")
+      : (baseName(src)+" expanded "+Math.round(outSz/srcSz)+"x to "+fmtSize(outSz)+" - implausible compression ratio");
+    appendLog("  SECURITY: "+why+". It was DISCARDED and is not analysed - treat this bundle as suspect until explained.");
+    LOG_TRUNC.push(why+" - discarded, not analysed");
+    setStatus("A compressed member expanded implausibly ("+baseName(src)+") - discarded and NOT analysed. Treat this bundle as tampered until explained.","err");
+    deleteFileIfExists(dst); return "";
+  }
+  VIEW_BYTES+=outSz;
+  return dst;
 }
 function onOpen(kind, rel, isDir){
   try{
@@ -7748,12 +8576,32 @@ function doSelfUpdate(){
     "$u='"+uq+"'","$t='"+tq+"'","$tmp=Join-Path $env:TEMP ('selfupd_'+[guid]::NewGuid().ToString('N')+'.hta')",
     "Invoke-WebRequest -Uri $u -OutFile $tmp -Headers @{ 'User-Agent'='"+SELF_HTA+"' }",
     "if((Get-Item $tmp).Length -lt 2000){ throw 'downloaded file too small' }",
+    /* ---- v1.17.21 (P6): stage, verify, back up, THEN replace ------------------------------------
+       Previously: download straight over the running .hta with no integrity check beyond a length
+       test, and no way back if the new build was broken or the download was tampered with.
+       An .hta is plain text and cannot be Authenticode-signed, so there is no signature to verify -
+       the honest controls are (1) refuse anything that is not recognisably this app, (2) keep a
+       backup so a bad update is reversible, (3) print the SHA-256 so it can be checked against the
+       release page by hand. This is NOT equivalent to signing, and the log says so. */
+    "$txt=Get-Content -LiteralPath $tmp -Raw -Encoding UTF8",
+    "if($txt -notmatch 'vSphere Support Bundle Analyzer'){ throw 'downloaded file is not the analyzer (marker string absent) - refusing to install it' }",
+    "if($txt -notmatch 'APP_VERSION\\s*=\\s*\"'+SELF_LATEST+'\"'){ throw 'downloaded file does not declare version "+SELF_LATEST+" - refusing to install it' }",
+    "$h=(Get-FileHash -LiteralPath $tmp -Algorithm SHA256).Hash.ToLower()",
+    "Write-Output ('SELFUPD_SHA256:'+$h)",
+    "$bak=$t + '.bak-' + (Get-Date -Format 'yyyyMMdd_HHmmss')",
+    "if(Test-Path -LiteralPath $t){ Copy-Item -LiteralPath $t -Destination $bak -Force; Write-Output ('SELFUPD_BACKUP:'+$bak) }",
     "Copy-Item $tmp $t -Force","Remove-Item $tmp -Force -ErrorAction SilentlyContinue","Write-Output 'SELFUPD_OK'"];
   try{ var f=fso.CreateTextFile(ps1,true); f.Write(L.join("\r\n")); f.Close(); }catch(ew){ setStatus("Self-update stage failed: "+ew.message,"err"); return; }
   try{ var r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -File "'+ps1+'" > "__LOG__" 2>&1']);
     try{ fso.DeleteFile(ps1); }catch(e0){}
     if((r.log+"").indexOf("SELFUPD_OK")>=0){ var b=$("selfUpd"); if(b) b.className="btn primary hide";
-      setStatus("Updated to v"+SELF_LATEST+" - CLOSE and reopen the app.","ok"); try{ alert("Update installed (v"+SELF_LATEST+").\n\nClose and reopen "+SELF_HTA+"."); }catch(e){} }
+      var sh=((r.log+"").match(/SELFUPD_SHA256:([0-9a-f]{64})/i)||[])[1]||"";
+      var bk=((r.log+"").match(/SELFUPD_BACKUP:(.+)/)||[])[1]||"";
+      appendLog("--- self-update ---\n  installed v"+SELF_LATEST
+        +(sh?("\n  SHA-256: "+sh+"\n  VERIFY THIS by hand against the checksum on the release page. An .hta is plain text and cannot be Authenticode-signed, so this hash is the only integrity evidence - the app cannot check it for you against a source it also fetched over the same channel."):"")
+        +(bk?("\n  previous build backed up to: "+trimStr(bk)+" (rename it back to roll this update back)"):""));
+      setStatus("Updated to v"+SELF_LATEST+" - CLOSE and reopen the app. Verify the SHA-256 in the log against the release page.","ok");
+      try{ alert("Update installed (v"+SELF_LATEST+").\n\nSHA-256:\n"+(sh||"(not computed)")+"\n\nVerify this against the release page before relying on it.\n\nPrevious build kept at:\n"+(trimStr(bk)||"(no backup - there was no existing file)")+"\n\nClose and reopen "+SELF_HTA+"."); }catch(e){} }
     else { appendLog("--- self-update ---\n"+r.log); setStatus("Self-update failed - see log.","err"); }
   }catch(e){ setStatus("Self-update failed: "+e.message,"err"); }
 }
@@ -7851,7 +8699,7 @@ function init(){
         else if(p) setStatus("That selection has no filesystem path - pick a real folder.","err"); }
     }catch(e){ setStatus("Folder picker unavailable: "+e.message,"err"); }
   };
-  $("logToggle").onclick=function(){ var l=$("log");
+  $("logToggle").onclick=function(){ appendLogFlush(); var l=$("log");   // show buffered lines, not a stale view
     if(l.style.display==="none"||!l.style.display){
       if(!trimStr(l.innerHTML.replace(/<[^>]*>/g,""))){ l.innerHTML='<span class="muted">(empty - extraction / parse output appears here.)</span>'; l.setAttribute("data-ph","1"); }
       l.style.display="block"; }
@@ -7903,8 +8751,12 @@ function init(){
   $("timeKind").onchange=function(){ TIME_KIND=this.value; render(); };
   /* rescoreForWindow() first: the brute-force detector reads the case window, so its verdict and the
      scores it contributes must be rebuilt before anything repaints. */
-  $("dfrom").onchange=function(){ DFROM=dayNum(this.value); rescoreForWindow(); render(); };
-  $("dto").onchange=function(){ DTO=dayNum(this.value); rescoreForWindow(); render(); };
+  /* v1.17.17 (VS-014): dayNum() returns 0 for anything it cannot parse, and 0 means "no bound" - so
+     "2026-13-45", "last tuesday" and a typo all silently widened the window back to everything while
+     the box still showed the text the operator typed. An unparseable or reversed window now says so
+     and is not applied, because a filter that quietly does nothing is how evidence gets missed. */
+  $("dfrom").onchange=function(){ applyCaseWindow(); };
+  $("dto").onchange=function(){ applyCaseWindow(); };
   $("tclear").onclick=function(){ $("tq").value=""; TQUERY=""; SCOREF={c5:true,c3:true,c1:true,c0:true};
     ACT_ACTOR=""; ACT_KIND=""; TIME_KIND=""; USER_SEL="";
     $("scf5").checked=$("scf3").checked=$("scf1").checked=$("scf0").checked=true; render(); };
