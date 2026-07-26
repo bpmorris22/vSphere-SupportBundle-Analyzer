@@ -481,7 +481,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.12";
+var APP_VERSION = "1.17.13";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -1783,11 +1783,50 @@ function mkVmEv(ep,ts,vm,kind,what,method,actor,via,src){
 /* ESXi: hostd task entity is an objID; etc/vmware/hostd/vmInventory.xml maps objID -> .vmx path.
    A VM that was UNREGISTERED is (correctly) absent from that file - so an unresolved objID is itself
    consistent with the unregister rather than a parser failure, and is labelled as such. */
-function esxiObjIdMap(){
-  var txt=readMember("etc/vmware/hostd/vmInventory.xml")||"", map={}, m;
-  var re=/<objID>(\d+)<\/objID>\s*(?:<secDomain>[^<]*<\/secDomain>\s*)?<vmxCfgPath>([^<]+)<\/vmxCfgPath>/ig;
-  while((m=re.exec(txt))) map[m[1]]=baseName(trimStr(m[2])).replace(/\.vmx$/i,"");
-  return map;
+/* objID -> VM name, and HOW it was resolved (v1.17.13).
+   vmInventory.xml is authoritative but lists only VMs that are STILL REGISTERED - so every VM that
+   was unregistered or deleted, which is precisely the forensically interesting set, fell through to
+   a bare objID. Those names ARE in the bundle: hostd tags VM-scoped lines with
+   sub="Vmsvc.vm:<path to .vmx>", and a task's opID appears on BOTH its "Task Created" line and those
+   VM-scoped lines - so joining on opID names the object.
+   Verified against an ESXi 9 lab bundle whose inventory held one entry while events referenced three
+   other objIDs: all three resolved, and two of them resolved to the SAME VM, which is correct - that
+   VM was registered, unregistered and re-registered, taking a new objID each time. That is real
+   history the old code threw away.
+   `via` records the provenance so the UI can state it instead of implying the inventory named it. */
+function esxiObjIdMap(hl){
+  var txt=readMember("etc/vmware/hostd/vmInventory.xml")||"", map={}, via={}, m;
+  /* Parse per ConfigEntry BLOCK rather than with one rigid regex. The previous pattern hard-coded
+     `<secDomain>...</secDomain>` between objID and vmxCfgPath, so an ESXi 9 bundle - which writes the
+     SELF-CLOSING `<secDomain/>` - matched nothing at all, and even the still-registered VM failed to
+     resolve. Pulling the two fields independently out of each block is immune to that, to element
+     order, and to any future sibling tag. */
+  var blocks=String(txt).split(/<ConfigEntry\b/i);
+  for(var b=1;b<blocks.length;b++){
+    var oi=blocks[b].match(/<objID>\s*(\d+)\s*<\/objID>/i);
+    var vp=blocks[b].match(/<vmxCfgPath>([^<]+)<\/vmxCfgPath>/i);
+    if(oi && vp){ map[oi[1]]=baseName(trimStr(vp[1])).replace(/\.vmx$/i,""); via[oi[1]]="vmInventory.xml (still registered)"; }
+  }
+  if(hl && hl.length){
+    var opName={}, i, om, pm, ln;
+    for(i=0;i<hl.length;i++){ ln=hl[i];
+      if(ln.indexOf("Vmsvc.vm:")<0) continue;                       // cheap prefilter before two regexes
+      pm=ln.match(/sub="Vmsvc\.vm:([^"]+)"/); if(!pm) continue;
+      om=ln.match(/opID="?([\w.:-]+)"?/); if(!om) continue;
+      if(!opName["#"+om[1]]) opName["#"+om[1]]=baseName(trimStr(pm[1])).replace(/\.vmx$/i,"");
+    }
+    for(i=0;i<hl.length;i++){ ln=hl[i];
+      if(ln.indexOf("Task Created")<0) continue;
+      /* numeric objID + a vim.* method only. A looser `haTask-([^-]*)-` also matched host-scoped
+         tasks like haTask-ha-folder-... and put a bogus "ha" entry in the map. */
+      var tm=ln.match(/Task Created\s*:\s*haTask-(\d+)-vim\./); if(!tm) continue;
+      var oid=tm[1]; if(map[oid]) continue;                          // inventory wins
+      var o2=ln.match(/opID="?([\w.:-]+)"?/); if(!o2) continue;
+      var nm=opName["#"+o2[1]];
+      if(nm){ map[oid]=nm; via[oid]="recovered from hostd opID correlation - NOT in vmInventory.xml, so this VM was unregistered or deleted"; }
+    }
+  }
+  return {map:map, via:via};
 }
 function parseVmEvents(){
   VMEV=[]; VMEV_SRC=""; var i, m;
@@ -1823,7 +1862,7 @@ function parseVmEvents(){
     parseVmwareLogs();   // v1.17.0: per-VM vmware.log lifecycle events (covers each VM's whole life since power-on, not hostd's short window)
     var hrel=resolveLog(["var/run/log/hostd.log","scratch/log/hostd.log","var/log/hostd.log"]); if(!hrel) return;
     VMEV_SRC=(VMEV.length?VMEV_SRC+" + hostd.log":baseName(hrel));
-    var hl=logLinesRot(hrel,DEEPROT), objs=esxiObjIdMap();
+    var hl=logLinesRot(hrel,DEEPROT), oim=esxiObjIdMap(hl), objs=oim.map, objVia=oim.via;
     /* "Task Created" only - hostd logs Created AND Completed for the same task, and they are ONE event.
        opID/user live in the [Originator@…] bracket; pull them from that bracket rather than trying to
        thread optional groups through one regex (lazy quantifiers happily skip optional groups and
@@ -1836,9 +1875,16 @@ function parseVmEvents(){
       var br=(h.match(/\[Originator@[^\]]*\]/)||[""])[0];
       var opid=(br.match(/opID=([^\s\]]+)/)||[])[1]||"";
       var usr=(br.match(/user=([^\s\]]*)/)||[])[1]||"";
-      var oid=m[2], nm=objs[oid]||("(objID "+oid+" - not in vmInventory.xml, consistent with an unregister/delete)");
+      /* The explanation belongs in a TOOLTIP, not in the VM name. It used to BE the name -
+         "(objID N - not in vmInventory.xml, consistent with an unregister/delete)" - which repeated
+         that sentence on every row for the object AND asserted a delete context on rows that were
+         power-ons and snapshots. Those events happened while the VM was live; the unregister came
+         later. Now the cell carries a short identity and the provenance rides in the title. */
+      var oid=m[2], nm=objs[oid]||("objID "+oid);
+      var note=objVia[oid]||("objID "+oid+" could not be resolved to a VM name: it is absent from vmInventory.xml (so it was unregistered or deleted) and no hostd line tied its opID to a .vmx path.");
       var via=/^esxui/i.test(opid)?"ESXi Host Client":(/^lro/i.test(opid)?"vCenter task":opid);
-      VMEV.push(mkVmEv(toEpoch(m[1]),m[1],nm,cc.kind,cc.what,m[3],trimStr(usr),via,baseName(hrel)));
+      var evh=mkVmEv(toEpoch(m[1]),m[1],nm,cc.kind,cc.what,m[3],trimStr(usr),via,baseName(hrel));
+      evh.vmNote=note; VMEV.push(evh);
     }
   }
   VMEV.sort(function(a,b){ return b.epoch-a.epoch; });
@@ -5635,7 +5681,7 @@ function renderVmEvents(){
     +'</tr></thead><tbody>';
   if(!rows.length) h+='<tr><td colspan="8" class="muted">No VM events match the current Type filter.</td></tr>';
   for(i=0;i<rows.length;i++){ var e=rows[i];
-    h+='<tr><td><b>'+esc(e.vm)+'</b></td>'
+    h+='<tr><td'+(e.vmNote?(' title="'+esc(e.vmNote)+'"'):'')+'><b>'+esc(e.vm)+'</b></td>'
       +'<td class="mono">'+esc(e.when)+'</td>'
       +'<td><span class="tag '+vmEvCls(e.kind)+'">'+esc(e.kind)+'</span></td>'
       +'<td>'+esc(e.what)+'</td>'
