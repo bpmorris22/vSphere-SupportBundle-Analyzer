@@ -148,6 +148,14 @@
   .tag.clu3{background:#2a2410;color:#e3b341;border:1px solid #8a7a2a}   /* amber  */
   .tag.clu4{background:#0c2b2b;color:#5ad4d4;border:1px solid #2a8a8a}   /* teal   */
   .tag.clu5{background:#33102a;color:#ff9ad4;border:1px solid #a03a80}   /* pink   */
+  /* Raw Device Mapping (v1.17.25). Its OWN class, deliberately not one of the severity colours and
+     not one of the cluster identity colours: an RDM is a storage FACT about the VM, not a finding and
+     not a group membership. Teal is unused elsewhere on this surface, so the chip cannot be misread
+     as red=finding / amber=review / green=pass. Physical (passthrough) is the more serious case and
+     is distinguished by WEIGHT and the word itself rather than by hue, so the two never collide with
+     the severity palette. */
+  .tag.rdm{background:#0c2b2b;color:#5ad4d4;border:1px solid #2a8a8a}
+  .tag.rdm.phys{background:#0e3838;color:#8ff0f0;border:1px solid #46c4c4;font-weight:700}
   .hl-ioc{color:#ff6b6b;font-weight:600}
   tr.hl-ioc td{color:#ff8b8b}
   .pgood{color:#3fb950;font-weight:600}.pmiss{color:#8b949e}.pkey{color:#e3b341;font-weight:700}
@@ -500,7 +508,7 @@
    MISMATCH, so a cached snapshot written by the previous build is reused verbatim - and one missing
    the new field then silently disables whatever reads it. 1.17.15 added hostMoRef / managedMorefs;
    1.17.16 adds vcServerIp / mgmtIp, which scope the MoRef join to the right vCenter. */
-var APP_VERSION = "1.17.23";
+var APP_VERSION = "1.17.26";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -5346,6 +5354,36 @@ function buildSpecEsxi(){
   var vs=readMember("commands/localcli_vsan-storage-list.txt");
   if(trimStr(vs)){ var blocks=parseBlocks(vs); if(blocks.length){ var sg=specSec("vSAN disk groups / disks","tbl"); sg.head=["Disk (naa)","SSD","Tier","Disk group","Mounted","In CMMDS"]; sg.tips=["Physical disk device (naa identifier) claimed by vSAN.","Whether the device is flash/SSD.","Cache vs Capacity role in the disk group.","Which vSAN disk group the device belongs to.","Whether vSAN has the device mounted.","Whether the disk is published in CMMDS (the vSAN cluster directory). A claimed disk missing from CMMDS is a vSAN health problem worth noting before any recovery."];
     for(i=0;i<blocks.length;i++){ var k=blocks[i].kv; sg.rows.push([blocks[i].name, k["Is SSD"]||"", (lc(k["Is Capacity Tier"]||"")==="true"?"Capacity":"Cache"), k["VSAN Disk Group Name"]||"", k["Is Mounted"]||"", k["In CMMDS"]||""]); } } }
+  /* ---- iSCSI / SAN storage (v1.17.26) ---------------------------------------------------------
+     The bundle carried the whole chain and the tool read none of it: which LUN a datastore sits on,
+     which target serves that LUN, and what the host's own initiator is. That gap was visible the
+     moment an RDM appeared - its identifier is an opaque vml.<hex>, and without this join there was
+     no way to say WHICH array or WHICH LUN to go and preserve.
+     Assembled here: adapter list (initiator IQN) + path list (target IQN, runtime name, LUN number)
+     + device list (size/vendor/model) + VMFS extent list (which datastore is on which device). */
+  var isc=buildIscsiView();
+  if(isc.adapters.length){
+    var ia=specSec("iSCSI initiator (this host)","tbl");
+    ia.head=["Adapter","Driver","State","Initiator IQN"];
+    ia.tips=["The HBA - vmhbaNN. A software iSCSI adapter means the host reaches this storage over its own IP network, not a dedicated fabric.",
+             "Driver bound to the adapter.",
+             "Link state at capture time. An offline adapter with VMs on its LUNs is a finding.",
+             "This host's iSCSI Qualified Name - the identity it presents to the array. Array-side ACLs are keyed on it, so it is what you quote when asking a storage team which LUNs this host was entitled to see."];
+    for(i=0;i<isc.adapters.length;i++){ var ad=isc.adapters[i]; ia.rows.push([ad.hba, ad.driver, ad.state, ad.iqn]); }
+  }
+  if(isc.luns.length){
+    var il=specSec("SAN LUNs (iSCSI / FC) and what uses them","tbl");
+    il.head=["Device","Runtime","LUN","Size","Vendor / model","Target","Used by"];
+    il.tips=["The storage device identifier (naa./eui.). This is the durable handle for the LUN - quote it to the storage team.",
+             "Runtime path name vmhbaNN:C:T:L - the adapter, channel, target and LUN number as this host addresses it.",
+             "LUN number on that target.",
+             "Capacity reported by the device.",
+             "Array vendor and model string. The model is often the array-side volume name, which is how you find it on the array.",
+             "Target IQN and transport. Two LUNs on the SAME target are served by the same array endpoint - if another host in the fleet also logs into it, the storage is shared and so is any blast radius.",
+             "What consumes the LUN on this host: a VMFS datastore (named), or a raw device mapping held by a VM. A LUN with NO consumer is presented but unused - worth asking why it is presented at all."];
+    for(i=0;i<isc.luns.length;i++){ var L=isc.luns[i];
+      il.rows.push([L.dev, L.runtime, (L.lun===""?"":L.lun), L.size, L.model, L.target, L.usedBy||"-"]); }
+  }
   var dc=readMember("commands/localcli_storage-core-device-capacity-list.txt");
   if(trimStr(dc)){ var pd=specSec("Physical storage devices","tbl"); pd.head=["Device","Size","Format"]; pd.tips=["Physical storage device presented to the host.","Raw capacity.","Partition/format reported for the device."]; var dr=wsRows(dc);
     for(i=0;i<dr.length;i++){ var dev=dr[i][0]; if(!dev) continue; var szc=dr[i][4]; var mib=parseInt(szc,10); pd.rows.push([dev, isNaN(mib)?(szc||""):fmtSize(mib*1048576), dr[i][5]||""]); } }
@@ -5654,8 +5692,178 @@ function parseVmdkDesc(txt){
   while((m=re.exec(txt))){ var sec=parseInt(m[2],10)||0, off=(m[5]!=null&&m[5]!=="")?parseInt(m[5],10):cum;
     ex.push({mode:m[1], sectors:sec, type:m[3], backing:m[4], start:off, end:off+sec-1}); cum=off+sec; }
   if(!ex.length) return null;
-  var totSec=0; for(var i=0;i<ex.length;i++) totSec+=ex[i].sectors;
-  return { extents:ex, sectors:totSec, bytes:totSec*512 };
+  var totSec=0, rdm=false;
+  for(var i=0;i<ex.length;i++){ totSec+=ex[i].sectors; if(/RDM/i.test(ex[i].type)) rdm=true; }
+  /* v1.17.24: the descriptor already told us this and it was being discarded. An RDM descriptor
+     declares createType="vmfsRawDeviceMap" (or vmfsPassthroughRawDeviceMap) and its extent type is
+     VMFSRDM rather than VMFS - the extent parser captured that type and nothing ever read it. */
+  var ct=(String(txt).match(/^\s*createType\s*=\s*"([^"]*)"/im)||[])[1]||"";
+  if(/RawDeviceMap/i.test(ct)) rdm=true;
+  return { extents:ex, sectors:totSec, bytes:totSec*512, createType:ct, rdm:rdm };
+}
+/* ---- Raw Device Mappings (v1.17.24) -------------------------------------------------------------
+   AN RDM IS NOT A DATASTORE, and looking for one in the volume list will never find it. It is a
+   mapping FILE (<vm>.vmdk) sitting on an ordinary VMFS datastore that points at a raw LUN the host
+   deliberately never formatted - so the LUN has no volume label, no filesystem, and nothing to report
+   under Datastores / Volumes. The volume list being silent about it is correct.
+   It still matters a great deal to an investigation, which is why it is now surfaced on the VM:
+     - the guest writes STRAIGHT TO THE LUN, bypassing VMFS. Ransomware encrypting through the guest
+       leaves no VMFS-level file rename, so the datastore rename tells this tool looks for cannot fire
+       for that data - absence of a rename signal is not absence of encryption on an RDM.
+     - a PHYSICAL (passthrough) RDM passes SCSI commands through to the array, including to storage
+       that may be shared with other hosts; a VIRTUAL (non-passthrough) one does not.
+     - the LUN identifier (vml./naa.) is the recovery handle for that disk - the RDM equivalent of the
+       vSAN GUID path - and the data is NOT inside the datastore, so a datastore-level restore will
+       not bring it back.
+   vm-support runs `vmkfstools -q` per disk and drops the answer in the VM's own folder as
+   dump-vmdk-rdm-info.sh*.txt. That capture is authoritative (it names passthrough vs not, and the
+   LUN); the descriptor corroborates it and covers the case where the capture is absent. */
+function parseRdmCapture(txt){
+  var out=[], lines=String(txt||"").split("\n"), i, m;
+  for(i=0;i<lines.length;i++){
+    var ln=trimStr(lines[i]); if(!ln) continue;
+    /* "Disk <file> is a Non-passthrough Raw Device Mapping" / "... is a Passthrough Raw Device Mapping" */
+    m=ln.match(/^Disk\s+(\S+)\s+is\s+an?\s+(.*?)\s*Raw Device Mapping/i);
+    if(m){ var mode=trimStr(m[2]);
+      out.push({file:m[1], mode:mode||"Raw Device Mapping",
+                phys:/pass-?through/i.test(mode) && !/non-?pass-?through/i.test(mode), lun:""});
+      continue; }
+    m=ln.match(/^Maps to:\s*(\S+)/i);
+    if(m && out.length) out[out.length-1].lun=m[1];
+  }
+  return out;
+}
+/* the per-VM vmkfstools -q capture that vm-support leaves beside the .vmx */
+function rdmCaptureRel(cfgRel){
+  var dir=dirOfRel(cfgRel), i;
+  if(MODE==="toc"){ var kids=tocChildren(dir);
+    for(i=0;i<kids.length;i++) if(/^dump-vmdk-rdm-info/i.test(kids[i].name)) return kids[i].rel; }
+  else { var names=listUnder(dir+"/", /^dump-vmdk-rdm-info/i); if(names.length) return dir+"/"+names[0]; }
+  return "";
+}
+function attachRdmInfo(){
+  var i, n=0, phys=0;
+  for(i=0;i<VMS.length;i++){ var v=VMS[i]; v.rdm=v.rdm||[];
+    if(!v.cfg || vmxIsMissing(v.cfg)) continue;
+    var rel=rdmCaptureRel(v.cfg); if(!rel) continue;
+    var txt=readMember(rel); if(!txt) continue;
+    var list=parseRdmCapture(txt);
+    for(var j=0;j<list.length;j++){ v.rdm.push(list[j]); n++; if(list[j].phys) phys++; }
+  }
+  if(n) appendLog("  VMs: "+nf(n)+" raw device mapping(s) on "+nf((function(){var c=0;for(var k=0;k<VMS.length;k++) if(VMS[k].rdm&&VMS[k].rdm.length) c++; return c;})())+" VM(s)"
+    +(phys?("; "+phys+" PHYSICAL/passthrough (SCSI commands reach the array directly)"):"")
+    +" - an RDM is a pointer to a raw LUN, not a datastore, so it is reported on the VM and not under Volumes.");
+}
+/* ---- SAN LUN view (v1.17.26) --------------------------------------------------------------------
+   Joins four localcli captures into one answer to "what storage is this host actually using, and who
+   is using it". Kept in one builder so the Specification table and the RDM resolver cannot disagree.
+     storage-core-adapter-list  -> the host's own initiator IQN per HBA
+     storage-core-path-list     -> device <-> target IQN, runtime name, LUN number, transport
+     storage-core-device-list   -> size / vendor / model per device
+     storage-vmfs-extent-list   -> which DATASTORE lives on which device
+   An RDM's identifier is a vml.<hex>, and the NAA is embedded inside that hex - which is the only
+   reason a raw LUN can be tied back to a target at all. */
+function iscsiAdapters(){
+  var t=readMember("commands/localcli_storage-core-adapter-list.txt"), out=[];
+  if(!trimStr(t)) return out;
+  var rows=wsRows(t);
+  for(var i=0;i<rows.length;i++){ var r=rows[i]; if(!r[0]) continue;
+    var uid=r[3]||""; if(!/^iqn\./i.test(uid)) continue;         // iSCSI adapters only - they carry an IQN
+    out.push({hba:r[0], driver:r[1]||"", state:r[2]||"", iqn:uid}); }
+  return out;
+}
+/* device -> {target, runtime, lun, transport} from the path list */
+function storagePaths(){
+  var t=readMember("commands/localcli_storage-core-path-list.txt"), map={};
+  if(!trimStr(t)) return map;
+  var lines=String(t).split("\n"), cur=null, i, m;
+  for(i=0;i<lines.length;i++){ var ln=lines[i];
+    if(/^\s*Runtime Name:/i.test(ln)){ cur={runtime:trimStr(ln.split(":").slice(1).join(":")), dev:"", target:"", lun:"", transport:""}; continue; }
+    if(!cur) continue;
+    m=ln.match(/^\s*Device:\s*(\S+)/i);        if(m){ cur.dev=m[1]; continue; }
+    m=ln.match(/^\s*LUN:\s*(\d+)/i);           if(m){ cur.lun=m[1]; continue; }
+    m=ln.match(/^\s*Transport:\s*(\S+)/i);     if(m){ cur.transport=m[1]; continue; }
+    /* prefer the parsed IQN from "Target Transport Details: IQN=..." over the raw Target Identifier */
+    m=ln.match(/IQN=(\S+)/i);                  if(m){ cur.target=m[1]; }
+    if(/^\s*Maximum IO Size:/i.test(ln) && cur.dev){ if(!map[cur.dev]) map[cur.dev]=cur; cur=null; } }
+  return map;
+}
+/* device -> {size, vendor, model} from the device list */
+function storageDevices(){
+  var t=readMember("commands/localcli_storage-core-device-list.txt"), map={};
+  if(!trimStr(t)) return map;
+  var lines=String(t).split("\n"), cur="", i, m;
+  for(i=0;i<lines.length;i++){ var ln=lines[i];
+    m=ln.match(/^(\S+):\s*$/); if(m){ cur=m[1]; map[cur]={size:"", vendor:"", model:""}; continue; }
+    if(!cur || !map[cur]) continue;
+    m=ln.match(/^\s*Size:\s*(\d+)/i);    if(m){ map[cur].size=fmtSize(parseInt(m[1],10)*1048576); continue; }
+    m=ln.match(/^\s*Vendor:\s*(.*)$/i);  if(m){ map[cur].vendor=trimStr(m[1]); continue; }
+    m=ln.match(/^\s*Model:\s*(.*)$/i);   if(m){ map[cur].model=trimStr(m[1]); } }
+  return map;
+}
+/* device -> datastore name, from the VMFS extent list */
+function vmfsExtentMap(){
+  var t=readMember("commands/localcli_storage-vmfs-extent-list.txt"), map={};
+  if(!trimStr(t)) return map;
+  var rows=wsRows(t);
+  for(var i=0;i<rows.length;i++){ var r=rows[i]; if(!r[0]) continue;
+    /* columns: Volume Name | VMFS UUID | Extent Number | Device Name | Partition - the volume name
+       can contain spaces, so take the DEVICE from the second-to-last column, not a fixed index */
+    var dev=r[r.length-2]||"", nm=r[0];
+    if(dev && /^(naa|eui|mpx|t10)\./i.test(dev)) map[dev]=nm; }
+  return map;
+}
+/* the NAA is embedded in an RDM's vml. identifier - this is what ties a raw LUN back to its target */
+function naaFromVml(vml){
+  var m=String(vml||"").match(/^vml\.[0-9a-f]{10}([0-9a-f]{32})/i);
+  return m ? ("naa."+lc(m[1])) : "";
+}
+function buildIscsiView(){
+  var out={adapters:[], luns:[]};
+  if(BTYPE!=="esxi") return out;
+  out.adapters=iscsiAdapters();
+  var paths=storagePaths(), devs=storageDevices(), ext=vmfsExtentMap(), d, i, j;
+  /* which devices does a VM hold as an RDM? resolve each RDM's vml. to its NAA */
+  var rdmBy={};
+  for(i=0;i<VMS.length;i++){ var v=VMS[i]; if(!v.rdm) continue;
+    for(j=0;j<v.rdm.length;j++){ var naa=naaFromVml(v.rdm[j].lun); if(!naa) continue;
+      rdmBy[naa]=(rdmBy[naa]?rdmBy[naa]+", ":"")+"RDM - "+v.name;
+      v.rdm[j].naa=naa;                      // remember it so the VM panel can name the target too
+      if(paths[naa]){ v.rdm[j].target=paths[naa].target||""; v.rdm[j].runtime=paths[naa].runtime||""; } } }
+  for(d in paths){ if(!paths.hasOwnProperty(d)) continue;
+    var p=paths[d];
+    if(!/iscsi|fc|fcoe|sas/i.test(p.transport||"")) continue;        // SAN transports only - local disks are already listed
+    var dv=devs[d]||{size:"",vendor:"",model:""};
+    out.luns.push({ dev:d, runtime:p.runtime, lun:p.lun, size:dv.size,
+      model:trimStr((dv.vendor+" "+dv.model)) || "-",
+      target:(p.target||"-")+(p.transport?(" ("+p.transport+")"):""),
+      usedBy: ext[d] ? ("datastore "+ext[d]) : (rdmBy[d]||"") });
+  }
+  out.luns.sort(function(a,b){ var x=(a.runtime||""), y=(b.runtime||""); return x<y?-1:(x>y?1:0); });
+  return out;
+}
+/* one chip + one explanation for a VM's raw device mappings, shared by every render site */
+function rdmTag(v){
+  if(!v || !v.rdm || !v.rdm.length) return "";
+  var phys=false, i; for(i=0;i<v.rdm.length;i++) if(v.rdm[i].phys) phys=true;
+  return ' <span class="tag rdm'+(phys?" phys":"")+'" title="'+esc(rdmTip(v))+'">RDM \\ LUN'+(phys?" (physical)":"")+'</span>';
+}
+function rdmTip(v){
+  var lines=[], i;
+  lines.push("RDM \\ LUN (Raw Device Mapping) - this VM has "+v.rdm.length+" disk(s) backed by a raw LUN, not by a file on a datastore.");
+  for(i=0;i<v.rdm.length;i++){ var r=v.rdm[i];
+    lines.push("  "+r.file+" - "+r.mode+(r.lun?("  ->  LUN "+r.lun):"  (LUN id not captured)"));
+    /* v1.17.26: the vml. is opaque on its own - resolved it says WHICH array endpoint to go to */
+    if(r.naa)     lines.push("      device "+r.naa+(r.runtime?("  ("+r.runtime+")"):""));
+    if(r.target)  lines.push("      served by target "+r.target+" - see Specification > SAN LUNs for the full path"); }
+  lines.push("");
+  lines.push("Why it is not in Datastores / Volumes: the mapped LUN is deliberately NOT formatted with VMFS, so it has no volume, no label and no free-space figure. Only the small mapping file lives on a datastore. This is expected, not a gap.");
+  lines.push("");
+  lines.push("Why it matters here: the guest writes straight to the LUN, bypassing VMFS - so ransomware encrypting through the guest leaves NO datastore-level file rename, and this tool's rename detection cannot fire for that data. Absence of a rename signal is not absence of encryption on an RDM.");
+  lines.push("A datastore-level restore will not recover it either: the data is not in the datastore. The LUN id above is the recovery handle - the RDM equivalent of a vSAN GUID path.");
+  var phys=false; for(i=0;i<v.rdm.length;i++) if(v.rdm[i].phys) phys=true;
+  if(phys) lines.push("PHYSICAL (passthrough): SCSI commands from the guest reach the array directly, including to storage that may be shared with other hosts.");
+  return lines.join("\n");
 }
 function extentSummary(d){ if(!d) return ""; var parts=[], i;
   for(i=0;i<d.extents.length;i++){ var e=d.extents[i];
@@ -5680,7 +5888,13 @@ function attachVmdkExtents(){
       var txt=""; try{ if(fileExists(path)) txt=readUtf8(path); }catch(e){}
       if(!txt) txt=catMember(r);
       var d=parseVmdkDesc(txt); if(!d) continue; got++;
-      for(i=0;i<map[r].length;i++){ var t=map[r][i]; t.vm.diskDetail.push({file:t.file, gb:(d.bytes/1073741824), sum:extentSummary(d)}); } }
+      for(i=0;i<map[r].length;i++){ var t=map[r][i]; t.vm.diskDetail.push({file:t.file, gb:(d.bytes/1073741824), sum:extentSummary(d), rdm:d.rdm, createType:d.createType});
+        /* descriptor-only fallback: if vm-support's vmkfstools capture is absent we still know this
+           disk is an RDM, we just cannot say passthrough vs virtual or name the LUN - so say that
+           rather than assert either (v1.17.24). */
+        if(d.rdm){ t.vm.rdm=t.vm.rdm||[]; var known=false;
+          for(var q=0;q<t.vm.rdm.length;q++) if(lc(t.vm.rdm[q].file)===lc(t.file)) known=true;
+          if(!known) t.vm.rdm.push({file:t.file, mode:"Raw Device Mapping (from the .vmdk descriptor - passthrough state not captured)", phys:false, lun:""}); } } }
     if(got) appendLog("  VMs: parsed "+nf(got)+" vmdk descriptor(s) for disk extents");
   } finally {
     /* VM disk descriptors are case evidence - they must not linger in %TEMP% after the run */
@@ -5968,6 +6182,9 @@ function parseVms(){ VMS=[]; VCSA_VM_META=null;
     if(nEnc) appendLog("  VMs: +"+nf(nEnc)+" folder(s) with missing/renamed .vmx - POSSIBLY ENCRYPTED");
   }catch(eE){ appendLog("  VMs enc-scan error: "+eE.message); }
   trace("    parseVms: attachVmdkExtents");
+  /* RDM detection BEFORE the descriptor pass: the vmkfstools capture is authoritative (it names
+     passthrough vs virtual and the LUN), and the descriptor pass then only fills gaps it left. */
+  try{ attachRdmInfo(); }catch(eR){ appendLog("  VMs RDM parse error: "+eR.message); }
   try{ attachVmdkExtents(); }catch(eX){ appendLog("  VMs extent parse error: "+eX.message); }
   trace("    parseVms: done");
   VMS.sort(function(a,b){ var ea=a.enc?0:1, eb=b.enc?0:1; if(ea!==eb) return ea-eb;
@@ -6019,7 +6236,7 @@ function renderVmsSimple(rows){
       +'<td class="muted" title="'+esc(osTip)+'">'+esc(v.os||"-")+'</td>'
       +'<td class="mono" style="text-align:center" title="'+esc(szTip)+'">'+(v.vcpu?v.vcpu:'<span class="muted">-</span>')+'</td>'
       +'<td class="mono" style="text-align:center" title="'+esc(szTip)+'">'+esc(fmtMB(v.memMB))+'</td>'
-      +'<td class="mono" title="'+esc(dkTip)+'">'+(v.ndisk?(v.ndisk+' <span class="muted">('+esc(trunc(v.disks.join(", "),34))+')</span>'):'<span class="muted">-</span>')+'</td>'
+      +'<td class="mono" title="'+esc(dkTip)+'">'+(v.ndisk?(v.ndisk+' <span class="muted">('+esc(trunc(v.disks.join(", "),34))+')</span>'):'<span class="muted">-</span>')+rdmTag(v)+'</td>'
       +'<td class="mono">'+esc(vmHostOf(v)||"-")+'</td>'
       +'<td>'+stat+'</td></tr>'; }
   h+='</tbody>'; $("vmsTbl").innerHTML=h;
@@ -6059,7 +6276,7 @@ function renderVms(){
       +'<td><b>'+esc(v.name)+'</b></td><td class="muted" title="'+esc(v.os||"guest OS not recorded in the .vmx")+'">'+esc(v.os||"-")+'</td>'
       +(showIp?('<td class="mono">'+(gip?esc(gip):'<span class="muted">-</span>')+'</td>'):'')
       +'<td class="mono" style="text-align:center" title="'+v.vcpu+' vCPU">'+v.vcpu+'</td><td class="mono" style="text-align:center" title="'+esc(v.memMB?(nf(v.memMB)+" MB configured"):"memSize not in .vmx")+'">'+esc(fmtMB(v.memMB))+'</td>'
-      +'<td class="mono" title="'+esc((v.disks.length?v.disks.join("  |  "):"no virtual disks declared in the .vmx")+(v.diskDetail&&v.diskDetail.length?("\nDisk extents (start-end sector = disk pointers):\n"+(function(dd){ var a=[]; for(var x=0;x<dd.length;x++) a.push(dd[x].file+" ["+dd[x].gb.toFixed(1)+" GB: "+dd[x].sum+"]"); return a.join("\n"); })(v.diskDetail)):"\n(disk descriptor not captured in this bundle - size/extents unavailable)"))+'">'+v.ndisk+(v.ndisk?' <span class="muted">('+esc(trunc(v.disks.join(", "),40))+')</span>':'')+'</td>'
+      +'<td class="mono" title="'+esc((v.disks.length?v.disks.join("  |  "):"no virtual disks declared in the .vmx")+(v.diskDetail&&v.diskDetail.length?("\nDisk extents (start-end sector = disk pointers):\n"+(function(dd){ var a=[]; for(var x=0;x<dd.length;x++) a.push(dd[x].file+" ["+dd[x].gb.toFixed(1)+" GB: "+dd[x].sum+"]"); return a.join("\n"); })(v.diskDetail)):"\n(disk descriptor not captured in this bundle - size/extents unavailable)"))+'">'+v.ndisk+(v.ndisk?' <span class="muted">('+esc(trunc(v.disks.join(", "),40))+')</span>':'')+rdmTag(v)+'</td>'
       +'<td class="mono" title="'+esc(v.vsan?("vSAN-backed - the vSAN object UUID in the disk descriptor is the recovery handle"):(v.ds?("datastore: "+v.ds):"datastore unknown"))+'">'+(v.vsan?'<span class="tag" style="background:#10233a;color:#79c0ff;border:1px solid #1f6feb">vSAN</span>':esc(v.ds||"-"))+'</td>'
       +(function(vp){ return '<td class="mono" style="font-size:11px" title="'+esc(vp?("VM folder on the host (from the captured .vmx location): "+vp+"\nThe .vmx and .vmdk files live here. Click to copy."):"no .vmx path was captured for this VM, so its folder is unknown - it has NOT been guessed from the VM name (a renamed VM keeps its original folder)")+'">'
         +(vp?('<span class="lnk" data-copy="'+esc(vp)+'">'+esc(vp)+'</span>'):'<span class="muted">-</span>')+'</td>'; })(vmFolderPath(v))
@@ -6427,6 +6644,22 @@ function openVm(cfgRel, vmName){
          +(vmDir?(' <span class="lnk" style="margin-left:6px" data-copy="'+esc(vmDir)+'" title="Copy the VM folder path - the recovery handle.">copy VM folder</span>'):''))
       : ('<span class="lnk" style="margin-left:8px" data-vmx="'+esc(cfgRel)+'">view .vmx config</span>'))
     +'</div>';
+  /* v1.17.24: an RDM changes what the rest of this panel can tell you, so it goes ABOVE the timeline
+     rather than being left to a tooltip on another tab. */
+  var rv=vcVmByName(vmName);
+  if(rv && rv.rdm && rv.rdm.length){
+    var anyPhys=false, ri; for(ri=0;ri<rv.rdm.length;ri++) if(rv.rdm[ri].phys) anyPhys=true;
+    /* v1.17.25: the banner uses the RDM chip's own teal, not a severity colour - this is a storage
+       fact that changes how the panel reads, not a finding against the host. */
+    h+='<div style="font-size:11px;margin-bottom:8px;background:#0c2b2b;color:#8ff0f0;border:1px solid '+(anyPhys?"#46c4c4":"#2a8a8a")+';border-radius:6px;padding:6px 8px" title="'+esc(rdmTip(rv))+'">'
+      +'<b>'+rv.rdm.length+' RAW DEVICE MAPPING'+(rv.rdm.length>1?"S":"")+' (RDM \\ LUN)'+(anyPhys?" - one is PHYSICAL (passthrough)":"")+'.</b> '
+      +'This VM writes directly to a raw LUN, bypassing VMFS - so it has <b>no datastore-level file activity</b> for that disk, '
+      +'and a rename-based encryption tell cannot fire for it. The mapped LUN is not a datastore and does not appear under Volumes.<br>';
+    for(ri=0;ri<rv.rdm.length;ri++){ var rr=rv.rdm[ri];
+      h+='<span class="mono">'+esc(rr.file)+'</span> &middot; '+esc(rr.mode)
+        +(rr.lun?(' &middot; LUN <span class="lnk" data-copy="'+esc(rr.lun)+'" title="Copy the LUN identifier - the recovery handle for this disk.">'+esc(rr.lun)+'</span>'):' &middot; <span class="muted">LUN id not captured</span>')+'<br>'; }
+    h+='</div>';
+  }
   if(!r.logs.length){ h+='<div class="muted" style="font-size:12px">No vmware.log for this VM in the bundle (guest may be powered off, or its datastore was not captured). '
     +(noVmx
       ? 'Its <span class="mono">.vmx</span> is missing or ransom-renamed too, so there is no config to fall back on - the folder path above is the recovery handle. Check the Security tab&#39;s ransomware indicators and the host&#39;s shell.log for what happened to this VM.'
