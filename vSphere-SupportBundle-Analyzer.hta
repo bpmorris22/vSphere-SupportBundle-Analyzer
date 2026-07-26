@@ -60,6 +60,10 @@
   .pill.vcsa{color:#79c0ff;border-color:#1f6feb}
   .pill.ok{color:#7ee787;border-color:#2ea043}
   .pill.bad{color:#ff8b3d;border-color:#bd561d;cursor:pointer}
+  /* scan-timer states: orange while counting, green when done, red on failure. `run` and `err` must
+     not share a colour or a failed scan reads as a running one. */
+  .pill.run{color:#ff8b3d;border-color:#bd561d}
+  .pill.err{color:#ff8b8b;border-color:#b02020}
   #appver{font-weight:700}
   #apppill{cursor:default}
   .wrap{padding:12px 14px}
@@ -269,7 +273,7 @@
         <button class="btn" id="tabIoc" data-tab="ioc" title="Hits for your IOC list (shared toolkit IOC.txt / IOC.csv - use 'Create IOC List' to edit) swept across the key logs present in this bundle, not the whole tree. IPs, users, hashes, filenames, keywords. Any hit scores +3 wherever it appears.">IOC hits</button>
         <button class="btn orange hide" id="backRosterBtn" style="float:right" title="Return to the fleet roster (kept in memory - no re-scan)">&#9664; Fleet roster</button>
       </div>
-      <div class="roadmap">Logons / Actions / Timeline / Persistence / IOC parse the key logs &amp; config automatically after Analyze (Re-run on Overview). Security holds the ransomware-indicator &amp; CVE-exposure panels alongside the graded patch state; Generate Report writes every tab into one self-contained HTML. Case window (/from /to) filters Timeline &amp; Logons, never scores. Next: fleet / multi-host mode.</div>
+      <div class="roadmap">Logons / Actions / Timeline / Persistence / IOC parse the key logs &amp; config automatically after Analyze (Re-Run on Overview). Security holds the ransomware-indicator &amp; CVE-exposure panels alongside the graded patch state; Generate Report writes every tab into one self-contained HTML. Case window (/from /to) filters Timeline &amp; Logons, never scores. Next: fleet / multi-host mode.</div>
     </div>
 
     <!-- OVERVIEW -->
@@ -277,7 +281,7 @@
       <!-- actions + headline counts sit ABOVE the node detail: they are what you act on first, and
            the stat cards are the jump-off points into the analysis tabs. -->
       <div style="border-bottom:1px solid #30363d;padding-bottom:10px;margin-bottom:12px">
-        <button class="btn" id="anBtn" title="Re-parse the key logs (auth/shell/hostd/websso/vpxd) into Logons, Actions, Timeline and re-sweep IOCs. Runs automatically after Analyze; click to re-run.">Re-run log analysis</button>
+        <button class="btn purple" id="anBtn" title="Re-parse the key logs (auth/shell/hostd/websso/vpxd) into Logons, Actions, Timeline and re-sweep IOCs. Runs automatically after Analyze; click to re-run.">Re-Run Log Analysis</button>
         <button class="btn green" id="reportBtn" title="Generate a self-contained HTML report - every tab in one document (node config, maintenance, key files, specification, VMs, network, indicators, CVEs, security posture, persistence, logons, sessions, actions, timeline, IOC hits) - and open it.">Generate Report</button>
         <span class="muted" id="anStatus" style="margin-left:8px;font-size:12px">Runs automatically after Analyze.</span>
         <div id="anStats" style="margin-top:8px"></div>
@@ -477,7 +481,7 @@
 <script language="JScript">
 "use strict";
 
-var APP_VERSION = "1.17.11";
+var APP_VERSION = "1.17.12";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -597,7 +601,7 @@ function procStop(ok){
   if(PROC_TIMER){ window.clearInterval(PROC_TIMER); PROC_TIMER=null; }
   if(!PROC_T0) return;
   var s=Math.floor(((new Date()).getTime()-PROC_T0)/1000), el=$("procTimer");
-  if(el){ el.className=(ok===false?"pill bad":"pill ok"); el.innerHTML="Scan time "+procFmt(s); }
+  if(el){ el.className=(ok===false?"pill err":"pill ok"); el.innerHTML="Scan time "+procFmt(s); }
   PROC_T0=0;
 }
 var TRACE_PATH="", TRACE_T0=0, TRACE_RUN=0, TRACE_MAXBYTES=2*1024*1024;
@@ -1979,6 +1983,10 @@ function maintCls(k){ return k==="update"?"audit":(k==="maintenance"?"net":(k===
    saying what it actually means: "service" or "modify" is not self-explanatory to someone reading a
    case note six months later. */
 function capLabel(s){ s=String(s==null?"":s); return s ? (s.charAt(0).toUpperCase()+s.substring(1)) : ""; }
+/* Title Case for short multi-word status labels ("powered on" -> "Powered On"). Same rule as
+   capLabel: presentation only. The stored v.status stays lowercase - CSV/JSON exports, the HTML
+   report and the fleet snapshots all carry it, and changing the value would alter exported data. */
+function titleLabel(s){ return String(s==null?"":s).replace(/\b[a-z]/g, function(c){ return c.toUpperCase(); }); }
 var KIND_TIPS=[
   /* maintenance kinds */
   [/^boot$/i,        "The node booted. On ESXi this is the host's own esx.audit.host.boot record; on vCenter it is usually derived from capture time minus uptime, which the Detail column states."],
@@ -5449,9 +5457,9 @@ function renderVmsSimple(rows){
     : ('<tr><td colspan="7" class="muted">'+(isVc?'No VM references found in the retained vpxd logs / DRS dumps.':'No .vmx files found in this bundle.')+'</td></tr>');
   for(var i=0;i<rows.length;i++){ var v=rows[i]; var isEsxi=(BTYPE==="esxi");
     var stat = v.enc
-      ? ('<span class="tag" style="background:#3a1010;color:#ff8b8b;border:1px solid #b02020" title="'+esc(v.enc)+'">possibly encrypted</span>')
-      : (v.running ? '<span class="pgood" title="'+esc(isEsxi?"Listed in the host running-VM process list at capture time.":(v.status||"Present in the newest DRS placement dump."))+'">'+(isEsxi?"running":"powered on")+'</span>'
-                   : '<span class="muted" title="'+esc(v.status||"Registered on the host but not running (powered off).")+'">'+esc(isEsxi?"registered":trunc(v.status,40))+'</span>');
+      ? ('<span class="tag" style="background:#3a1010;color:#ff8b8b;border:1px solid #b02020" title="'+esc(v.enc)+'">Possibly Encrypted</span>')
+      : (v.running ? '<span class="pgood" title="'+esc(isEsxi?"Listed in the host running-VM process list at capture time.":(v.status||"Present in the newest DRS placement dump."))+'">'+(isEsxi?"Running":"Powered On")+'</span>'
+                   : '<span class="muted" title="'+esc(v.status||"Registered on the host but not running (powered off).")+'">'+esc(isEsxi?"Registered":titleLabel(trunc(v.status,40)))+'</span>');
     var osTip = v.os ? v.os : (isVc?"not available in a vCenter bundle":"guest OS not recorded in the .vmx (missing / ransom-renamed?)");
     var szTip = v.specSrc ? ("source: "+v.specSrc) : (v.vcpu?"":(isVc?"no DRS VMData for this VM (not powered on in the newest dump)":"not in the .vmx"));
     var dkTip = v.disks.length
@@ -5506,7 +5514,7 @@ function renderVms(){
       +(function(vp){ return '<td class="mono" style="font-size:11px" title="'+esc(vp?("VM folder on the host (from the captured .vmx location): "+vp+"\nThe .vmx and .vmdk files live here. Click to copy."):"no .vmx path was captured for this VM, so its folder is unknown - it has NOT been guessed from the VM name (a renamed VM keeps its original folder)")+'">'
         +(vp?('<span class="lnk" data-copy="'+esc(vp)+'">'+esc(vp)+'</span>'):'<span class="muted">-</span>')+'</td>'; })(vmFolderPath(v))
       +'<td class="mono" style="font-size:11px" title="'+esc(v.guidPath?("vSAN VM folder (from the captured vmfs path): "+v.guidPath):(v.vsan?"vSAN-backed but the folder UUID was not captured":"not on vSAN - no vSAN GUID path"))+'">'+(v.guidPath?esc(v.guidPath):'<span class="muted">-</span>')+'</td>'
-      +'<td>'+(v.enc?('<span class="tag" style="background:#3a1010;color:#ff8b8b;border:1px solid #b02020" title="'+esc(v.enc)+'">possibly encrypted</span> <span class="muted" style="font-size:11px" title="'+esc(v.enc)+'">'+esc(trunc(v.enc,46))+'</span>'):(v.running?'<span class="pgood" title="Listed in the host running-VM process list at capture time.">running</span>':'<span class="muted" title="Registered on the host but not in the running-VM process list (powered off).">registered</span>'))+'</td></tr>'; }
+      +'<td>'+(v.enc?('<span class="tag" style="background:#3a1010;color:#ff8b8b;border:1px solid #b02020" title="'+esc(v.enc)+'">Possibly Encrypted</span> <span class="muted" style="font-size:11px" title="'+esc(v.enc)+'">'+esc(trunc(v.enc,46))+'</span>'):(v.running?'<span class="pgood" title="Listed in the host running-VM process list at capture time.">Running</span>':'<span class="muted" title="Registered on the host but not in the running-VM process list (powered off).">Registered</span>'))+'</td></tr>'; }
   h+='</tbody>'; $("vmsTbl").innerHTML=h;
   var trs=$("vmsTbl").getElementsByTagName("tr");
   for(var t=0;t<trs.length;t++){ if(trs[t].getAttribute("data-cfg")){ trs[t].onclick=function(){ openVm(this.getAttribute("data-cfg"), this.getAttribute("data-nm")); }; } }
@@ -5560,7 +5568,7 @@ function renderVcsaVms(){
       +'<td class="mono" style="text-align:center" title="'+esc(v.specSrc?("source: "+v.specSrc):"no DRS VMData for this VM (not powered on in the newest dump)")+'">'+esc(fmtMB(v.memMB))+'</td>'
       +'<td class="mono" title="'+esc(v.disks.length?("from backup I/O: "+v.disks.join("  |  ")):"no backup .vmdk reads seen for this VM in the log window")+'">'+(v.ndisk?(v.ndisk+' <span class="muted">('+esc(trunc(v.disks.join(", "),40))+')</span>'):'<span class="muted">-</span>')+'</td>'
       +'<td class="mono" style="font-size:11px" title="'+esc(v.guidPath?("source: "+v.guidSrc):(v.vsan?"on vSAN but no folder GUID in the retained logs":"not on vSAN - no vSAN GUID path"))+'">'+(v.guidPath?esc(v.guidPath):'<span class="muted">-</span>')+'</td>'
-      +'<td title="'+esc(v.status||"")+'">'+(v.running?'<span class="pgood">powered on</span>':'<span class="muted">'+esc(trunc(v.status,40))+'</span>')+'</td>'
+      +'<td title="'+esc(v.status||"")+'">'+(v.running?'<span class="pgood">Powered On</span>':'<span class="muted">'+esc(titleLabel(trunc(v.status,40)))+'</span>')+'</td>'
       +'<td>'+(v.enc?('<span class="tag" style="background:#3a1010;color:#ff8b8b;border:1px solid #b02020" title="'+esc(v.enc)+'">'+esc(trunc(v.enc,64))+'</span>'):'<span class="muted">-</span>')+'</td></tr>'; }
   h+='</tbody>'; $("vmsTbl").innerHTML=h;
   setupColResizeFor($("vmsTbl"),"vmsvc"); freezeThs($("vmsScroll"));
@@ -5670,10 +5678,41 @@ function vmLogRels(cfgRel){
     if(na==null&&nb!=null) return -1; if(nb==null&&na!=null) return 1; return (parseInt(nb,10)||0)-(parseInt(na,10)||0); });
   return out.slice(0, DEEPROT?10:4);
 }
+/* ---- bounded per-VM log read (v1.17.12) ---------------------------------------------------------
+   THE VM-CLICK CRASH. parseVmLog used catMember(), which has no cap, and only truncated to 4 MB
+   AFTER the whole file was already a JS string - far too late. The reference bundle carries per-VM
+   logs of 313.9 MB, 222.9 MB and 119.8 MB, and readUtf8 materialises a file as UTF-16 (~2x its
+   bytes), so clicking one of those VMs asked a 32-bit mshta already sitting near 400 MB for another
+   ~600 MB. It died with no error, and the trace stopped at "setTab vms" because the click handler
+   was never instrumented.
+   The BULK pass has guarded exactly this since v1.17.0 (size skip + head/tail); this path simply
+   never got the same treatment. Same lesson as the v1.17.8 magic-byte sniff: never read a whole file
+   to use a little of it. Head AND tail, because a VM's power-on sits at the start and its snapshot /
+   guest-op activity accretes at the end - a head-only read would silently drop the recent half. */
+var VMLOG_CLICK_HEAD=2*1024*1024, VMLOG_CLICK_TAIL=2*1024*1024;
+function vmLogText(rel){
+  var path="", tmpCopy=false, out={txt:"", capped:false, size:-1};
+  if(MODE==="tree"){ path=ROOT+"\\"+winRel(rel); if(!fileExists(path)) return out; }
+  else {
+    var fso=new ActiveXObject("Scripting.FileSystemObject");
+    path=(fso.GetSpecialFolder(2)+"")+"\\vsbcat_"+uid()+".dat"; tmpCopy=true;
+    runBat(['"'+batEsc(TAR)+'" -xOf "'+batEsc(ARCHIVE)+'" "'+batEsc(PREFIX+"/"+rel)+'" > "'+batEsc(path)+'" 2>nul'], false);
+    if(!fileExists(path)) return out;
+  }
+  out.size=fileSize(path);
+  if(out.size>(VMLOG_CLICK_HEAD+VMLOG_CLICK_TAIL)){
+    out.capped=true;
+    out.txt=readCappedText(path, VMLOG_CLICK_HEAD)+"\n"+readTailText(path, VMLOG_CLICK_TAIL);
+  } else {
+    out.txt=readCappedText(path, VMLOG_CLICK_HEAD+VMLOG_CLICK_TAIL);
+  }
+  if(tmpCopy){ try{ new ActiveXObject("Scripting.FileSystemObject").DeleteFile(path); }catch(e){} }
+  return out;
+}
 function parseVmLog(cfgRel){
-  var logs=vmLogRels(cfgRel), ev=[], i, j, lastMig=0, pendTake=-1;
-  for(i=0;i<logs.length;i++){ var txt=catMember(logs[i]); if(!txt) continue;
-    if(txt.length>4194304) txt=txt.substring(0,4194304);
+  var logs=vmLogRels(cfgRel), ev=[], i, j, lastMig=0, pendTake=-1, capped=[];
+  for(i=0;i<logs.length;i++){ var got=vmLogText(logs[i]); var txt=got.txt; if(!txt) continue;
+    if(got.capped) capped.push(baseName(logs[i])+" ("+fmtSize(got.size)+")");
     var lines=txt.split("\n"), src=baseName(logs[i]);
     for(j=0;j<lines.length && ev.length<600;j++){ var ln=lines[j];
       var m=ln.match(/^(\S+Z)\s.*VigorTransportProcessClientPayload:\s*opID=(\S+)\s+seq=\d+:\s*Receiving\s+(\S+)\s+request/);
@@ -5688,12 +5727,15 @@ function parseVmLog(cfgRel){
     }
   }
   ev.sort(function(a,b){ return a.epoch-b.epoch; });
-  return {logs:logs, events:ev};
+  return {logs:logs, events:ev, capped:capped};
 }
 function vmEvClass(k){ return k==="snapshot"?"warn":(k==="guest-op"?"hit":(k==="power"?"":"")); }
 function openVm(cfgRel, vmName){
+  /* traced: the VM-click crash (v1.17.12) left the trace ending at "setTab vms" because nothing in
+     this handler wrote a line, so there was no way to tell a crash here from a normal end of run. */
+  trace("openVm: "+baseName(cfgRel));
   setStatus("Reading "+baseName(cfgRel)+" activity log…","muted");
-  var r; try{ r=parseVmLog(cfgRel); }catch(e){ r={logs:[],events:[]}; }
+  var r; try{ r=parseVmLog(cfgRel); }catch(e){ r={logs:[],events:[],capped:[]}; }
   var snap=0, del=0, poff=0, gop=0, vc=0, i;
   for(i=0;i<r.events.length;i++){ var e=r.events[i]; if(e.kind==="snapshot"){ snap++; if(/Delete|Consolidate/.test(e.ev)) del++; }
     if(e.ev==="Bootstrap.PowerOff") poff++; if(e.kind==="guest-op") gop++; if(e.via==="vCenter task") vc++; }
@@ -5706,6 +5748,9 @@ function openVm(cfgRel, vmName){
       +(snap?(' &middot; <b>'+snap+' snapshot op(s)'+(del?(", "+del+" delete/consolidate"):"")+'</b>'):'')
       +(poff?(' &middot; '+poff+' power-off'):'')+(gop?(' &middot; <span style="color:#ff8b8b">'+gop+' guest-op</span>'):'')
       +(vc?(' &middot; '+vc+' via vCenter'):'')+'. opID <span class="mono">lro-*</span> = a vCenter task (join it in vpxa/vpxd).</div>';
+    /* a partial read must never look complete - these logs run to hundreds of MB and only the
+       first and last 2 MB are parsed, so the middle is UNREAD, not empty. */
+    if(r.capped && r.capped.length) h+='<div class="maxwarn" style="font-size:11px;margin-bottom:6px" title="'+esc("Only the first and last "+fmtSize(VMLOG_CLICK_HEAD)+" of each oversized log were read - the middle was NOT parsed, so events there are missing rather than absent. Open the log itself from the Key Files tab for the full history.")+'">&#9888; Large log(s) read head+tail only: '+esc(r.capped.join(', '))+'</div>';
     if(!r.events.length) h+='<div class="muted" style="font-size:12px">No power / snapshot / migration / guest-op events (only routine guest-stats noise, filtered).</div>';
     else { h+='<div class="scroll" style="max-height:44vh"><table><thead><tr><th title="Event time from the VM&#39;s own vmware.log, UTC.">When (UTC)</th><th title="The VMX operation: power, snapshot, migration or guest-op. Snapshot delete/consolidate before an encryption window is the ransomware tell.">Event</th><th title="Grouping for the event: power / snapshot / migrate / guest-op.">Kind</th><th title="Where the operation came from: a vCenter task (opID lro-*), the ESXi Host Client, or a direct API / vim-cmd call on the host.">Initiator</th><th title="Operation ID. An lro-* value joins this VM event to vpxa/vpxd - the vCenter&rarr;host&rarr;VM chain.">opID</th><th title="Extra context for the event, e.g. the snapshot name.">Detail</th><th title="Which vmware.log (or rotation) the event came from.">Log</th></tr></thead><tbody>';
       for(i=0;i<r.events.length;i++){ var ev=r.events[i]; var cl=vmEvClass(ev.kind);
@@ -6578,7 +6623,7 @@ function triageFleet(){
   appendLog("=== FLEET discovery under "+root+" ==="+(FLEET_REUSE?" (reuse cached analysis where source unchanged)":" (forced fresh re-analysis)"));
   setStatus("Fleet: scanning "+root+" for bundles…","muted");
   FLEET=[]; FLEET_HOSTS={}; FLEET_I=0;
-  ensureDir(fleetBase()); traceInit("fleet"); procStart("Fleet scan");   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
+  ensureDir(fleetBase()); traceInit("fleet"); procStart("Fleet Scan");   // crash tracer: _fleet\_fleet-trace.txt - last line = crashing stage
   trace("triageFleet start; root="+root);
   try{ FLEET_CANDS=discoverBundles(root); }
   catch(eDisc){ FLEET_CANDS=[]; setStatus("Fleet discovery failed while scanning "+root+": "+(eDisc&&eDisc.message?eDisc.message:eDisc)+" - try pointing at the folder that directly holds the bundles.","err"); appendLog("Fleet discovery error: "+(eDisc&&eDisc.message?eDisc.message:eDisc)); return; }
@@ -6876,7 +6921,7 @@ function render(){
   if(TAB==="net"){ renderNetwork(); return; }
   if(TAB==="vms"){ renderVms(); return; }
   if(TAB==="inv"){ renderInventory(); return; }
-  if(!ANALYZED){ $("tbl").innerHTML='<thead><tr><th>Parsing…</th></tr></thead><tbody><tr><td class="muted">Log analysis runs automatically after Analyze. If this stays empty, open <b>Show log</b> for per-log diagnostics, or click <b>Re-run log analysis</b> on Overview.</td></tr></tbody>'; $("tcount").innerHTML=""; return; }
+  if(!ANALYZED){ $("tbl").innerHTML='<thead><tr><th>Parsing…</th></tr></thead><tbody><tr><td class="muted">Log analysis runs automatically after Analyze. If this stays empty, open <b>Show log</b> for per-log diagnostics, or click <b>Re-Run Log Analysis</b> on Overview.</td></tr></tbody>'; $("tcount").innerHTML=""; return; }
   if(TAB==="logon") renderLogon(); else if(TAB==="act") renderAct(); else if(TAB==="time") renderTime(); else if(TAB==="persist") renderPersist(); else if(TAB==="ioc") renderIoc(); else if(TAB==="users") renderUsers();
 }
 
