@@ -508,7 +508,7 @@
    MISMATCH, so a cached snapshot written by the previous build is reused verbatim - and one missing
    the new field then silently disables whatever reads it. 1.17.15 added hostMoRef / managedMorefs;
    1.17.16 adds vcServerIp / mgmtIp, which scope the MoRef join to the right vCenter. */
-var APP_VERSION = "1.17.27";
+var APP_VERSION = "1.17.28";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -958,6 +958,8 @@ function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObjec
 function fileSize(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").GetFile(p).Size; }catch(e){ return -1; } }
 function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
 /* v1.17.27 (R4): promote a finished temporary file into place. true only when the destination exists afterwards. */
+/* v1.17.28 (F3): rename a folder; false if the source is gone or the target already exists. */
+function moveFolder(a,b){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(!fso.FolderExists(a) || fso.FolderExists(b)) return false; fso.MoveFolder(a,b); return fso.FolderExists(b); }catch(e){ return false; } }
 function moveFile(a,b){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(fso.FileExists(b)) fso.DeleteFile(b,true); fso.MoveFile(a,b); return !!fso.FileExists(b); }catch(e){ return false; } }
 function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
 function ensureDir(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
@@ -1029,9 +1031,11 @@ function treeFingerprint(root){
     try{ var e=new Enumerator(fo.Files); for(; !e.atEnd(); e.moveNext()){
       if((++n + dirs) > TREESIG_MAXNODES){ stop("over the "+nf(TREESIG_MAXNODES)+"-node budget"); return; }
       var f=e.item(), nm="", sz=0, mt=0;
-      try{ nm=String(f.Name); }catch(eN){}
-      try{ sz=Number(f.Size)||0; }catch(eZ){}
-      try{ mt=(new Date(f.DateLastModified)).getTime(); if(isNaN(mt)) mt=0; }catch(eM){ mt=0; }
+      /* v1.17.28 (F5): a metadata read that fails used to become "" / 0 inside a fingerprint that still
+         claimed to be complete - and a later same-size edit to that file need not change it. */
+      try{ nm=String(f.Name); }catch(eN){ stop("a file's name could not be read in "+(rel||"root")+": "+(eN.message||eN)); return; }
+      try{ sz=Number(f.Size); if(isNaN(sz)) throw new Error("size is not a number"); }catch(eZ){ stop("the size of "+rel+"/"+nm+" could not be read: "+(eZ.message||eZ)); return; }
+      try{ mt=(new Date(f.DateLastModified)).getTime(); if(isNaN(mt)) throw new Error("mtime is not a date"); }catch(eM){ stop("the modification time of "+rel+"/"+nm+" could not be read: "+(eM.message||eM)); return; }
       bytes+=sz; recs.push(lc(rel+"/"+nm)+"|"+sz+"|"+mt); } }catch(e3){ stop("files could not be listed ("+(rel||"root")+"): "+(e3.message||e3)); return; }
     try{ var s=new Enumerator(fo.SubFolders); for(; !s.atEnd(); s.moveNext()){
       var sub=s.item(); if(isReparsePoint(sub)) continue;      // never follow junctions - loop/fault guard
@@ -1045,12 +1049,17 @@ function treeFingerprint(root){
   TREESIG_CACHE_KEY=ckey; TREESIG_CACHE=res;
   return res;
 }
+/* v1.17.28 (F4): the schema of what the derived caches are allowed to contain. Bump it whenever the rules
+   that produced _view / _extracted content get stricter, so content accepted under the old rules is purged
+   once instead of surviving the upgrade. 2 = decompressed logs must have passed exit-code and gzip-trailer
+   validation (v1.17.27 added the first, v1.17.28 the second; anything cached before either is suspect). */
+var CACHE_SCHEMA=2;
 function sourceSigOf(src, mode){
   var sz=-1, mt="", tsig="", tcap=false, twhy="";
   try{ if(mode!=="tree" && fileExists(src)){ sz=fileSize(src); mt=fileMtime(src); }
        else if(mode==="tree"){ var rd=src+"\\README"; if(fileExists(rd)){ sz=fileSize(rd); mt=fileMtime(rd); }
          var tf=treeFingerprint(src); tsig=tf.sig; tcap=tf.capped; twhy=tf.why||""; } }catch(e){}
-  return { src:lc(String(src||"")), size:sz, mtime:mt, mode:String(mode||""), tree:tsig, treeCapped:!!tcap, treeWhy:twhy };
+  return { src:lc(String(src||"")), size:sz, mtime:mt, mode:String(mode||""), tree:tsig, treeCapped:!!tcap, treeWhy:twhy, cache:CACHE_SCHEMA };
 }
 function sourceManifestPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\source.json"; }
 /* ---- per-output-folder lock (v1.17.21, P5) ------------------------------------------------------
@@ -1061,8 +1070,17 @@ function sourceManifestPath(outdir){ return String(outdir).replace(/[\\\/]+$/,""
    bindSourceCache exists to prevent, arriving by a different door.
    A lock file carries the owning PID and a heartbeat timestamp. A lock whose process is gone, or
    whose heartbeat is stale, is reclaimed - a crashed run must not wedge the folder forever. */
-var LOCK_STALE_MS=15*60*1000, LOCK_HELD="", LOCK_TOKEN="";
-function lockPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\.run.lock"; }
+var LOCK_STALE_MS=15*60*1000, LOCK_HELD="", LOCK_TOKEN="", LOCK_LOST=false;
+/* v1.17.28 (F3): the lock is a FOLDER, not a file. FileSystemObject has no create-exclusive for files, so
+   two instances could each write a record, each read their own back, and each proceed (the reviewer's
+   two-context probe did exactly that). CreateFolder on NTFS is atomic: exactly one caller succeeds. The
+   owner's record lives inside it. */
+function lockPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\.run.lock.d"; }
+function legacyLockPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\.run.lock"; }   // v1.17.21-v1.17.27 file lock
+function lockRecordPath(dir){ return String(dir)+"\\owner.json"; }
+function claimLockDir(dir){ try{ new ActiveXObject("Scripting.FileSystemObject").CreateFolder(dir); return true; }catch(e){ return false; } }
+function readLockRecord(dir){ try{ var o=JSON.parse(readUtf8(lockRecordPath(dir))); return (o && typeof o==="object") ? o : null; }catch(e){ return null; } }
+function folderAgeMs(dir){ try{ var d=new ActiveXObject("Scripting.FileSystemObject").GetFolder(dir).DateCreated; var t=(new Date(d)).getTime(); return isNaN(t)?-1:((new Date()).getTime()-t); }catch(e){ return -1; } }
 /* Use wmiSvc(), NEVER GetObject(): this HTA runs under x-ua-compatible IE=edge, where GetObject is
    undefined - the mistake that left killBatTree dead for several releases, and which the test suite
    catches. wmiSvc() is the one connect path in the app.
@@ -1075,52 +1093,66 @@ function pidAlive(pid){
   }catch(ex){ return null; }
 }
 function lockRecord(){ return JSON.stringify({pid:selfPidWmi()||0, token:LOCK_TOKEN, stamp:(new Date()).getTime(), iso:isoNowUtc(), app:APP_VERSION},null,1); }
-/* v1.17.27 (R7): a lock whose owner is ALIVE is honoured regardless of heartbeat age. Indexing a large
-   archive runs for up to 40 min inside one poll loop and the heartbeat fired only per analysis stage,
-   so a second instance could take a folder the first was still writing to. The clock now decides only
-   when WMI cannot say whether the owner is running. The record carries an ownership token: touch and
-   release act only on a lock that is still ours, and failing to take the lock STOPS the run instead of
-   continuing unprotected. */
+/* v1.17.27 (R7): a lock whose owner is ALIVE is honoured regardless of heartbeat age; the clock decides
+   only when WMI cannot say whether the owner is running. v1.17.28 (F3): ownership is the TOKEN in the
+   record, never the PID (two instances whose PID lookup fails both report 0). A stale lock is reclaimed
+   by moving its folder aside - a rename either succeeds for exactly one caller or fails - re-checking
+   that what was moved is still the stale record we judged, and then claiming afresh. Every heartbeat
+   re-reads the record: if the token is no longer ours the lock is LOST, the run's remaining stages are
+   skipped and disclosed, and release leaves the other owner's lock alone. */
 function acquireOutputLock(outdir){
   try{
     ensureDir(outdir);
-    var p=lockPath(outdir), me=selfPidWmi()||0, now=(new Date()).getTime();
-    if(fileExists(p)){
-      var old=null; try{ old=JSON.parse(readUtf8(p)); }catch(e0){}
-      if(old && String(old.pid)!==String(me)){
-        var age=now-(Number(old.stamp)||0), alive=pidAlive(old.pid), mins=Math.round(age/60000);
-        if(alive===true || (alive===null && age<LOCK_STALE_MS)){
-          appendLog("OUTPUT FOLDER IN USE: "+outdir+"\n  held by process "+old.pid+" since "+(old.iso||"?")+" (heartbeat "+mins+" min old; "+(alive===null?"process state unknown - WMI did not answer":"process is running")+"). Two runs writing one output folder interleave their evidence, so this run is stopping.");
-          setStatus("That output folder is in use by another instance (pid "+old.pid+"). Close it, or set a different Output directory, then re-run."+(alive===null?(" If no such process exists, delete "+p+" and re-run."):""),"err");
-          return false;
-        }
-        appendLog("Reclaiming a stale lock on "+outdir+" (pid "+old.pid+(alive===null?(" could not be confirmed and its heartbeat is "+mins+" min old"):" is gone")+") - the previous run did not finish cleanly.");
+    var dir=lockPath(outdir), now=(new Date()).getTime();
+    LOCK_LOST=false; LOCK_TOKEN=uid();
+    try{ if(fileExists(legacyLockPath(outdir))){ deleteFileIfExists(legacyLockPath(outdir)); appendLog("Removed a lock file left by an earlier version ("+legacyLockPath(outdir)+"); this version locks with a folder."); } }catch(eL){}
+    if(!claimLockDir(dir)){
+      var old=readLockRecord(dir), age, alive;
+      if(old){ age=now-(Number(old.stamp)||0); alive=pidAlive(old.pid); }
+      else { age=folderAgeMs(dir); if(age<0) age=0; alive=null; }   // no record: a claim in progress, or a crash between claim and write
+      var mins=Math.round(age/60000);
+      if(alive===true || (alive===null && age<LOCK_STALE_MS)){
+        appendLog("OUTPUT FOLDER IN USE: "+outdir+"\n  held by process "+(old?old.pid:"?")+" since "+((old&&old.iso)||"?")+" (heartbeat "+mins+" min old; "+(alive===null?"process state unknown - WMI did not answer":"process is running")+"). Two runs writing one output folder interleave their evidence, so this run is stopping.");
+        setStatus("That output folder is in use by another instance (pid "+(old?old.pid:"?")+"). Close it, or set a different Output directory, then re-run."+(alive===null?(" If no such process exists, delete the folder "+dir+" and re-run."):""),"err");
+        LOCK_TOKEN=""; return false;
       }
+      appendLog("Reclaiming a stale lock on "+outdir+" (pid "+(old?old.pid:"?")+(alive===null?(" could not be confirmed and its heartbeat is "+mins+" min old"):" is gone")+") - the previous run did not finish cleanly.");
+      var aside=dir+".stale-"+LOCK_TOKEN;
+      if(!moveFolder(dir, aside)){ appendLog("Another instance reclaimed "+outdir+" first - this run is stopping."); setStatus("Another instance claimed that output folder at the same moment. Re-run, or set a different Output directory.","err"); LOCK_TOKEN=""; return false; }
+      var moved=readLockRecord(aside);
+      if((old && (!moved || String(moved.token||"")!==String(old.token||""))) || (!old && moved)){
+        /* what we moved is not the stale record we judged: a fresh claim landed in between - put it back */
+        moveFolder(aside, dir);
+        appendLog("Another instance claimed "+outdir+" while a stale lock was being cleared - this run is stopping.");
+        setStatus("Another instance claimed that output folder at the same moment. Re-run, or set a different Output directory.","err"); LOCK_TOKEN=""; return false; }
+      deleteTree(aside);
+      if(!claimLockDir(dir)){ appendLog("Another instance claimed "+outdir+" first - this run is stopping."); setStatus("Another instance claimed that output folder at the same moment. Re-run, or set a different Output directory.","err"); LOCK_TOKEN=""; return false; }
     }
-    LOCK_TOKEN=uid(); writeUtf8(p, lockRecord());
-    var chk=null; try{ chk=JSON.parse(readUtf8(p)); }catch(e1){}
+    writeUtf8(lockRecordPath(dir), lockRecord());
+    var chk=readLockRecord(dir);
     if(!chk || String(chk.token)!==String(LOCK_TOKEN)){
-      LOCK_TOKEN="";
-      appendLog("OUTPUT FOLDER LOCK: another instance claimed "+outdir+" at the same moment - this run is stopping.");
-      setStatus("Another instance claimed that output folder at the same moment. Re-run, or set a different Output directory.","err");
-      return false; }
-    LOCK_HELD=p; return true;
+      appendLog("OUTPUT FOLDER LOCK: the claim on "+outdir+" did not read back as ours - this run is stopping.");
+      setStatus("Could not confirm the output-folder lock. Re-run, or set a different Output directory.","err"); LOCK_TOKEN=""; return false; }
+    LOCK_HELD=dir; return true;
   }catch(e){
     LOCK_TOKEN="";
     appendLog("OUTPUT FOLDER LOCK could not be taken on "+outdir+" ("+e.message+") - stopping rather than running unprotected: two runs writing one output folder interleave their evidence.");
     setStatus("Could not take the output-folder lock ("+e.message+"). Fix the folder's permissions or set a different Output directory, then re-run.","err");
     return false; }
 }
+function lockStillOurs(){ if(!LOCK_HELD) return false; var cur=readLockRecord(LOCK_HELD); return !!cur && String(cur.token||"")===String(LOCK_TOKEN); }
 function touchOutputLock(){
   if(!LOCK_HELD) return;
-  try{ writeUtf8(LOCK_HELD, lockRecord()); }catch(e){}
+  if(!lockStillOurs()){
+    var held=LOCK_HELD; LOCK_HELD=""; LOCK_TOKEN=""; LOCK_LOST=true;
+    appendLog("OUTPUT FOLDER LOCK LOST: "+held+" is no longer held by this instance - another run has claimed the folder. The remaining stages of this run are being SKIPPED so the two runs do not interleave their evidence; re-run once the other instance has finished.");
+    setStatus("The output folder was claimed by another instance mid-run. This run stopped writing; its results are incomplete. Re-run when the other instance has finished.","err");
+    return; }
+  try{ writeUtf8(lockRecordPath(LOCK_HELD), lockRecord()); }catch(e){}
 }
 function releaseOutputLock(){
   if(!LOCK_HELD) return;
-  try{ var cur=null; try{ cur=JSON.parse(readUtf8(LOCK_HELD)); }catch(e0){}
-    if(!cur || String(cur.token||"")===String(LOCK_TOKEN)) deleteFileIfExists(LOCK_HELD);
-    else appendLog("Output lock "+LOCK_HELD+" now belongs to another instance (pid "+cur.pid+") - left in place.");
-  }catch(e){}
+  try{ if(lockStillOurs()) deleteTree(LOCK_HELD); else appendLog("Output lock "+LOCK_HELD+" now belongs to another instance - left in place."); }catch(e){}
   LOCK_HELD=""; LOCK_TOKEN="";
 }
 /* Returns TRUE only when the caches in `outdir` are safe to reuse for `src`.
@@ -1147,7 +1179,20 @@ function bindSourceCache(outdir, src, mode){
     else if(manifestBad) untrustedWhy="the source manifest (source.json) is unreadable, so the owner of the existing cache cannot be established";
     else if(!hadManifest) untrustedWhy="there is no source manifest, so the owner of the existing cache cannot be established";
     if(old && old.src===sig.src && old.size===sig.size && old.mtime===sig.mtime
-           && old.mode===sig.mode && String(old.tree||"")===String(sig.tree||"")) return true;   // same source - caches valid
+           && old.mode===sig.mode && String(old.tree||"")===String(sig.tree||"")){
+      if(Number(old.cache||0)===Number(sig.cache)) return true;   // same source, same rules - caches valid
+      /* v1.17.28 (F4): same source, but the cache was produced under older rules. The decompressed-log
+         cache (_view) is the layer whose acceptance rules changed, so it alone is rebuilt; extractions are
+         byte copies out of the archive and stay. Without this, a partial log accepted by v1.17.26 would
+         have been served by every later version - the fleet snapshot's version check sits ABOVE this
+         layer and never reaches it. */
+      appendLog("SOURCE CACHE: the decompressed-log cache in this folder was built by an earlier version (schema "+(old.cache||1)+", now "+sig.cache+") whose acceptance rules were weaker. It is being discarded and rebuilt; extracted files are unaffected.");
+      if(!deleteTree(String(outdir).replace(/[\\\/]+$/,"")+"\\_view")){
+        appendLog("SOURCE CACHE VALIDATION FAILED - the outdated _view cache could not be removed. The manifest was NOT updated; close anything holding those files and re-run.");
+        setStatus("Cache validation FAILED - an outdated decompressed-log cache could not be removed. Choose a clean output directory and re-run.","err");
+        return false; }
+      writeUtf8(p, JSON.stringify(sig,null,1));
+      return true; }
     /* derived content is judged on its own existence, never on whether the manifest parsed */
     var od=String(outdir).replace(/[\\\/]+$/,""), derived=[], i;
     var dDirs=["_extracted","_view","_nodecfg","_inner"], dFiles=["toc.tsv","inner.json"];
@@ -4195,7 +4240,9 @@ function runAnalysis(){
   /* traced + GC'd stage wrapper, matching fleet's fstep. Single-Analyze previously had NO gcNow() at
      all: the theory was that its setTimeout chunks let the collector run on its own, but that is an
      assumption, not a measurement, and it costs nothing to stop relying on it. */
-  function astep(name, fn){ trace("stage "+name); touchOutputLock(); safeStep(name, fn); gcNow(); }
+  function astep(name, fn){ trace("stage "+name); touchOutputLock();
+    if(LOCK_LOST){ ANALYSIS_ERRS.push(name+" (skipped - output folder lock lost)"); trace("stage "+name+" SKIPPED - lock lost"); return; }   // v1.17.28 (F3)
+    safeStep(name, fn); gcNow(); }
   window.setTimeout(function(){
     astep("maint", parseMaint); astep("logons", parseLogons); astep("bruteforce", bfApply); $("anStatus").innerHTML="Parsed logons ("+nf(LOGON.length)+")… actions…";
     window.setTimeout(function(){ try{
@@ -7409,12 +7456,19 @@ function isoNow(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
 var SNAP_WHY="";
 function analysisSettingsSig(){
   var parts=[], i;
-  try{ var rows=[]; for(i=0;i<IOC_ROWS.length;i++){ var r=IOC_ROWS[i]||{}; var v=trimStr(String(r.v||"")); if(!v) continue; rows.push(lc(String(r.t||""))+"="+lc(v)); }
+  /* v1.17.28 (F1): digest the matchers the sweep RUNS WITH (IOC_M, built by loadToolkitIoc at start-up and
+     again on every editor save), not the editor buffer - which is empty until the editor is opened, so the
+     ordinary "start, scan" workflow hashed nothing even with a full IOC list active. */
+  try{ var rows=[]; for(i=0;i<IOC_M.length;i++){ var r=IOC_M[i]||{}; var v=trimStr(String(r.v||"")); if(!v) continue; rows.push(lc(String(r.t||""))+"="+lc(v)); }
        rows.sort(); parts.push("ioc:"+rows.length+":"+digest64(rows.join("\n"))); }catch(e1){ parts.push("ioc:unknown"); }
   parts.push("rot:"+(DEEPROT?1:0)+"/"+MAXROT);
+  /* v1.17.28 (F2): the case window is NOT display-only - bfAnalyze honours it, so the brute-force verdict,
+     the flagged-logon count and the risk a snapshot stores all move with it. v1.17.27 excluded it on a
+     wrong reading of the code; the reviewer measured risk 0 vs 13 under one signature. */
+  parts.push("win:"+(DFROM||0)+"-"+(DTO||0));
   try{ if(!CVEDATA && !CVEDATA_ERR) loadCveData(); parts.push("cve:"+(CVEDATA?digest64(JSON.stringify(CVEDATA)):"none")); }catch(e2){ parts.push("cve:unknown"); }
   parts.push("nvd:"+(NVD_ON?1:0));
-  return "s1|"+parts.join("|");
+  return "s2|"+parts.join("|");
 }
 function snapSig(path, archive, mode, root){ var sz=0, mt="", tree="", tcap=false;
   try{ if(archive){ sz=fileSize(archive); mt=fileMtime(archive); }
@@ -7441,7 +7495,7 @@ function loadSnapshot(outdir, sig){
       if(String(s.tree||"")!==String(sig.tree)){ SNAP_WHY="the extracted tree's content changed"; return null; }
     }
     /* v1.17.27 (R3): same source, different analysis settings -> the saved counts answer a different question */
-    if(String(s.settings||"")!==String(sig.settings||"")){ SNAP_WHY="the analysis settings changed since it was saved (IOC list, rotated-log setting, CVE data or NVD toggle)"; return null; }
+    if(String(s.settings||"")!==String(sig.settings||"")){ SNAP_WHY="the analysis settings changed since it was saved (IOC list, rotated-log setting, case window, CVE data or NVD toggle)"; return null; }
     /* v1.17.27 (R8): a saved analysis with failed stages is re-run, never served as current */
     if(o.snap.parserFailures && o.snap.parserFailures.length){ SNAP_WHY="the saved analysis had "+o.snap.parserFailures.length+" failed stage(s) ("+o.snap.parserFailures.join(", ")+") - re-running so they get another attempt"; return null; }
     var snap=o.snap; snap.reused=true; return snap;
@@ -7544,6 +7598,7 @@ function resetHostGlobals(){ TOC=[]; TOCMAP={}; TOCDIR=null; TOCSORT=null; PREFI
 function processHostSync(path){
   var tp="h"+FLEET_I+" "+baseName(path);
   touchOutputLock();                     // heartbeat: a long fleet run must not look abandoned
+  if(LOCK_LOST){ trace(tp+" | SKIPPED - output folder lock lost"); appendLog("  = "+baseName(path)+" SKIPPED: the output folder lock was lost to another instance."); return null; }   // v1.17.28 (F3)
   trace(tp+" | ENTER processHostSync");
   trace(tp+" | resolveBundleDesc (magic-byte sniff)");
   var d=resolveBundleDesc(path); if(!d){ trace(tp+" | resolveBundleDesc -> null (skip)"); return null; }
@@ -8780,7 +8835,13 @@ function viewablePath(src){
   var tmp=dst+".part-"+uid(), r=null;
   if(/\.gz$/.test(low)){
     var srcq=src.replace(/'/g,"''"), dstq=tmp.replace(/'/g,"''");
-    var cmd="try{$i=[IO.File]::OpenRead('"+srcq+"');$g=New-Object System.IO.Compression.GZipStream($i,[System.IO.Compression.CompressionMode]::Decompress);$o=[IO.File]::Create('"+dstq+"');$g.CopyTo($o);$o.Dispose();$g.Dispose();$i.Dispose();exit 0}catch{Write-Output ('GZIP FAILED: '+$_);exit 1}";
+    /* v1.17.28 (F6): .NET's GZipStream verifies the CRC of a stream that ENDS properly, but a stream cut
+       off mid-way simply returns at EOF with exit 0 - the reviewer cached 106,214 of 211,882 bytes that way.
+       A gzip member ends with an 8-byte trailer whose last four bytes are the uncompressed length mod 2^32,
+       so a decompression that produced a different length did not reach a real trailer: it was truncated,
+       or the file has further members this runtime does not read. Either way the output is not the log.
+       The comparison uses -band, never the modulo operator: this string lands in a .bat, where % is magic. */
+    var cmd="try{$i=[IO.File]::OpenRead('"+srcq+"');if($i.Length -lt 18){throw 'too short to be a gzip file'};[void]$i.Seek(-4,[IO.SeekOrigin]::End);$b=New-Object byte[] 4;[void]$i.Read($b,0,4);$isize=[int64][BitConverter]::ToUInt32($b,0);$i.Position=0;$g=New-Object System.IO.Compression.GZipStream($i,[System.IO.Compression.CompressionMode]::Decompress);$o=[IO.File]::Create('"+dstq+"');$g.CopyTo($o);$out=[int64]$o.Length;$o.Dispose();$g.Dispose();$i.Dispose();if(($out -band 4294967295) -ne $isize){Write-Output ('GZIP INCOMPLETE: the gzip trailer records '+$isize+' uncompressed bytes (low 32 bits) but '+$out+' were produced - the stream is truncated, or carries further members that were not read');exit 2};exit 0}catch{Write-Output ('GZIP FAILED: '+$_);exit 1}";
     r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+cmd.replace(/"/g,'\\"')+'" > "__LOG__" 2>&1', 'exit /b %errorlevel%'], false);
   } else { // .zst
     if(!ensureZstd()) return "";
