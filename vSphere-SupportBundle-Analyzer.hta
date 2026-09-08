@@ -508,7 +508,7 @@
    MISMATCH, so a cached snapshot written by the previous build is reused verbatim - and one missing
    the new field then silently disables whatever reads it. 1.17.15 added hostMoRef / managedMorefs;
    1.17.16 adds vcServerIp / mgmtIp, which scope the MoRef join to the right vCenter. */
-var APP_VERSION = "1.17.26";
+var APP_VERSION = "1.17.27";
 var APP_NAME    = "vSphere";
 var SELF_HTA    = "vSphere-SupportBundle-Analyzer.hta";
 var SELF_REPO   = "bpmorris22/vSphere-SupportBundle-Analyzer";
@@ -927,6 +927,7 @@ function pollDone(ctx){
     ctx.onDone(log); return;
   }
   ctx.elapsed+=1;
+  if(ctx.elapsed%30===0) touchOutputLock();   // v1.17.27 (R7): a 40-min index must not look abandoned
   if(ctx.elapsed>2400){ ctx.onTimeout&&ctx.onTimeout(); return; }   // 40-min cap (huge tars)
   if(ctx.onTick) ctx.onTick(ctx.elapsed);
   window.setTimeout(function(){ pollDone(ctx); }, 1000);
@@ -956,6 +957,8 @@ function killBatTree(ctx){
 function fileExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FileExists(p); }catch(e){ return false; } }
 function fileSize(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").GetFile(p).Size; }catch(e){ return -1; } }
 function folderExists(p){ try{ return new ActiveXObject("Scripting.FileSystemObject").FolderExists(p); }catch(e){ return false; } }
+/* v1.17.27 (R4): promote a finished temporary file into place. true only when the destination exists afterwards. */
+function moveFile(a,b){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject"); if(fso.FileExists(b)) fso.DeleteFile(b,true); fso.MoveFile(a,b); return !!fso.FileExists(b); }catch(e){ return false; } }
 function parentDir(p){ var i=String(p).lastIndexOf("\\"); return i>=0?p.substring(0,i):p; }
 function ensureDir(p){ try{ var fso=new ActiveXObject("Scripting.FileSystemObject");
   if(!p || fso.FolderExists(p)) return fso.FolderExists(p);
@@ -988,9 +991,12 @@ function deleteFileIfExists(p){ try{ var fso=new ActiveXObject("Scripting.FileSy
    deleting any file in an extracted bundle - which is exactly what happens when someone "just checks
    something" in a copy of the evidence - left every cache and every saved analysis looking valid, so
    the tool would happily serve findings for a tree that no longer existed in that form.
-   This walks the tree and folds file COUNT, TOTAL BYTES and the NEWEST mtime into one string. It is
-   not a hash - it does not need to be. It has to notice ordinary modification, and any edit changes
-   at least the mtime, while add/delete changes the count. Bounded so a pathological tree cannot hang
+   v1.17.27 (R2): this used to fold COUNT, TOTAL BYTES and a string-compared "newest" mtime into one
+   value. Under JScript String(DateLastModified) begins with the weekday name, so the max was not an
+   ordering of dates at all; a same-size edit to any file but the newest, and any rename, were
+   invisible. It is now a digest over every file's sorted relative path, size and NUMERIC mtime, and
+   every early exit (depth limit, unreadable folder) marks the walk incomplete instead of returning a
+   fingerprint that silently covers part of the tree. Bounded so a pathological tree cannot hang
    the run; if the walk hits its budget the fingerprint says so and reuse is refused rather than
    guessed at, because a fingerprint that silently covers only part of a tree is worse than none. */
 var TREESIG_MAXNODES=40000;
@@ -999,35 +1005,52 @@ var TREESIG_MAXNODES=40000;
    whole cost of this check paid twice for nothing. Memoised per root, cleared per host by
    resetHostGlobals so a second bundle can never inherit the first one's fingerprint (v1.17.17). */
 var TREESIG_CACHE=null, TREESIG_CACHE_KEY="";
+function fnv1a32(str, seed){
+  var h=(seed>>>0)||0x811c9dc5, s=String(str);
+  for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0; }
+  var x=h.toString(16); while(x.length<8) x="0"+x; return x;
+}
+/* two independent 32-bit FNV-1a passes = a 64-bit change-detection digest. Not cryptographic and not
+   meant to be: it has to notice an edit, not resist an adversary who can already write to the tree. */
+function digest64(str){ return fnv1a32(str, 0x811c9dc5)+fnv1a32(str, 0x050c5d1f); }
 function treeFingerprint(root){
   var ckey=lc(String(root||""));
   if(TREESIG_CACHE && TREESIG_CACHE_KEY===ckey) return TREESIG_CACHE;
-  var n=0, bytes=0, newest="", capped=false, dirs=0;
-  var fso; try{ fso=new ActiveXObject("Scripting.FileSystemObject"); }catch(e){ return {sig:"", capped:true}; }
-  function walk(dir, depth){
-    if(capped || depth>12) return;
-    var fo; try{ fo=fso.GetFolder(dir); }catch(e1){ return; }
+  var n=0, bytes=0, capped=false, why="", dirs=0, recs=[];
+  var fso; try{ fso=new ActiveXObject("Scripting.FileSystemObject"); }catch(e){ return {sig:"", capped:true, why:"no file-system access"}; }
+  function stop(reason){ if(!capped){ capped=true; why=reason; } }
+  function walk(dir, rel, depth){
+    if(capped) return;
+    if(depth>12){ stop("a branch is nested deeper than 12 levels ("+rel+")"); return; }
+    var fo; try{ fo=fso.GetFolder(dir); }catch(e1){ stop("a folder could not be opened ("+(rel||"root")+"): "+(e1.message||e1)); return; }
     /* directories count against the budget too: a tree of a million EMPTY folders would otherwise
        walk forever while the file counter never moved (the review flagged this class app-wide). */
-    if((++dirs + n) > TREESIG_MAXNODES){ capped=true; return; }
+    if((++dirs + n) > TREESIG_MAXNODES){ stop("over the "+nf(TREESIG_MAXNODES)+"-node budget"); return; }
     try{ var e=new Enumerator(fo.Files); for(; !e.atEnd(); e.moveNext()){
-      if((++n + dirs) > TREESIG_MAXNODES){ capped=true; return; }
-      var f=e.item(); try{ bytes+=Number(f.Size)||0; var m=String(f.DateLastModified); if(m>newest) newest=m; }catch(e2){} } }catch(e3){}
+      if((++n + dirs) > TREESIG_MAXNODES){ stop("over the "+nf(TREESIG_MAXNODES)+"-node budget"); return; }
+      var f=e.item(), nm="", sz=0, mt=0;
+      try{ nm=String(f.Name); }catch(eN){}
+      try{ sz=Number(f.Size)||0; }catch(eZ){}
+      try{ mt=(new Date(f.DateLastModified)).getTime(); if(isNaN(mt)) mt=0; }catch(eM){ mt=0; }
+      bytes+=sz; recs.push(lc(rel+"/"+nm)+"|"+sz+"|"+mt); } }catch(e3){ stop("files could not be listed ("+(rel||"root")+"): "+(e3.message||e3)); return; }
     try{ var s=new Enumerator(fo.SubFolders); for(; !s.atEnd(); s.moveNext()){
       var sub=s.item(); if(isReparsePoint(sub)) continue;      // never follow junctions - loop/fault guard
-      walk(sub.Path+"", depth+1); if(capped) return; } }catch(e4){}
+      var sn=""; try{ sn=String(sub.Name); }catch(eS){}
+      walk(sub.Path+"", rel+"/"+sn, depth+1); if(capped) return; } }catch(e4){ stop("sub-folders could not be listed ("+(rel||"root")+"): "+(e4.message||e4)); return; }
   }
-  walk(String(root), 0);
-  var res = capped ? {sig:"", capped:true} : {sig:n+"f/"+dirs+"d/"+bytes+"b/"+newest, capped:false};
+  walk(String(root), "", 0);
+  var res;
+  if(capped) res={sig:"", capped:true, why:why};
+  else { recs.sort(); res={sig:n+"f/"+dirs+"d/"+bytes+"b/"+digest64(recs.join("\n")), capped:false, why:""}; }
   TREESIG_CACHE_KEY=ckey; TREESIG_CACHE=res;
   return res;
 }
 function sourceSigOf(src, mode){
-  var sz=-1, mt="", tsig="", tcap=false;
+  var sz=-1, mt="", tsig="", tcap=false, twhy="";
   try{ if(mode!=="tree" && fileExists(src)){ sz=fileSize(src); mt=fileMtime(src); }
        else if(mode==="tree"){ var rd=src+"\\README"; if(fileExists(rd)){ sz=fileSize(rd); mt=fileMtime(rd); }
-         var tf=treeFingerprint(src); tsig=tf.sig; tcap=tf.capped; } }catch(e){}
-  return { src:lc(String(src||"")), size:sz, mtime:mt, mode:String(mode||""), tree:tsig, treeCapped:!!tcap };
+         var tf=treeFingerprint(src); tsig=tf.sig; tcap=tf.capped; twhy=tf.why||""; } }catch(e){}
+  return { src:lc(String(src||"")), size:sz, mtime:mt, mode:String(mode||""), tree:tsig, treeCapped:!!tcap, treeWhy:twhy };
 }
 function sourceManifestPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\source.json"; }
 /* ---- per-output-folder lock (v1.17.21, P5) ------------------------------------------------------
@@ -1038,18 +1061,26 @@ function sourceManifestPath(outdir){ return String(outdir).replace(/[\\\/]+$/,""
    bindSourceCache exists to prevent, arriving by a different door.
    A lock file carries the owning PID and a heartbeat timestamp. A lock whose process is gone, or
    whose heartbeat is stale, is reclaimed - a crashed run must not wedge the folder forever. */
-var LOCK_STALE_MS=15*60*1000, LOCK_HELD="";
+var LOCK_STALE_MS=15*60*1000, LOCK_HELD="", LOCK_TOKEN="";
 function lockPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\.run.lock"; }
 /* Use wmiSvc(), NEVER GetObject(): this HTA runs under x-ua-compatible IE=edge, where GetObject is
    undefined - the mistake that left killBatTree dead for several releases, and which the test suite
-   catches. wmiSvc() is the one connect path in the app. */
+   catches. wmiSvc() is the one connect path in the app.
+   Returns true (running), false (gone) or null (WMI could not answer - v1.17.27). */
 function pidAlive(pid){
   var n=parseInt(pid,10)||0; if(!n) return false;
   try{ wmiSvc();
     var e=new Enumerator(WMI_SVC.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId="+n));
     return !e.atEnd();
-  }catch(ex){ return true; }   // cannot tell -> assume alive, i.e. respect the lock (fail closed)
+  }catch(ex){ return null; }
 }
+function lockRecord(){ return JSON.stringify({pid:selfPidWmi()||0, token:LOCK_TOKEN, stamp:(new Date()).getTime(), iso:isoNowUtc(), app:APP_VERSION},null,1); }
+/* v1.17.27 (R7): a lock whose owner is ALIVE is honoured regardless of heartbeat age. Indexing a large
+   archive runs for up to 40 min inside one poll loop and the heartbeat fired only per analysis stage,
+   so a second instance could take a folder the first was still writing to. The clock now decides only
+   when WMI cannot say whether the owner is running. The record carries an ownership token: touch and
+   release act only on a lock that is still ours, and failing to take the lock STOPS the run instead of
+   continuing unprotected. */
 function acquireOutputLock(outdir){
   try{
     ensureDir(outdir);
@@ -1057,24 +1088,41 @@ function acquireOutputLock(outdir){
     if(fileExists(p)){
       var old=null; try{ old=JSON.parse(readUtf8(p)); }catch(e0){}
       if(old && String(old.pid)!==String(me)){
-        var age=now-(Number(old.stamp)||0);
-        if(pidAlive(old.pid) && age<LOCK_STALE_MS){
-          appendLog("OUTPUT FOLDER IN USE: "+outdir+"\n  held by process "+old.pid+" since "+(old.iso||"?")+". Two runs writing one output folder interleave their evidence, so this run is stopping.");
-          setStatus("That output folder is in use by another instance (pid "+old.pid+"). Close it, or set a different Output directory, then re-run.","err");
+        var age=now-(Number(old.stamp)||0), alive=pidAlive(old.pid), mins=Math.round(age/60000);
+        if(alive===true || (alive===null && age<LOCK_STALE_MS)){
+          appendLog("OUTPUT FOLDER IN USE: "+outdir+"\n  held by process "+old.pid+" since "+(old.iso||"?")+" (heartbeat "+mins+" min old; "+(alive===null?"process state unknown - WMI did not answer":"process is running")+"). Two runs writing one output folder interleave their evidence, so this run is stopping.");
+          setStatus("That output folder is in use by another instance (pid "+old.pid+"). Close it, or set a different Output directory, then re-run."+(alive===null?(" If no such process exists, delete "+p+" and re-run."):""),"err");
           return false;
         }
-        appendLog("Reclaiming a stale lock on "+outdir+" (pid "+old.pid+(pidAlive(old.pid)?", heartbeat "+Math.round(age/60000)+" min old":" is gone")+") - the previous run did not finish cleanly.");
+        appendLog("Reclaiming a stale lock on "+outdir+" (pid "+old.pid+(alive===null?(" could not be confirmed and its heartbeat is "+mins+" min old"):" is gone")+") - the previous run did not finish cleanly.");
       }
     }
-    writeUtf8(p, JSON.stringify({pid:me, stamp:now, iso:isoNowUtc(), app:APP_VERSION},null,1));
+    LOCK_TOKEN=uid(); writeUtf8(p, lockRecord());
+    var chk=null; try{ chk=JSON.parse(readUtf8(p)); }catch(e1){}
+    if(!chk || String(chk.token)!==String(LOCK_TOKEN)){
+      LOCK_TOKEN="";
+      appendLog("OUTPUT FOLDER LOCK: another instance claimed "+outdir+" at the same moment - this run is stopping.");
+      setStatus("Another instance claimed that output folder at the same moment. Re-run, or set a different Output directory.","err");
+      return false; }
     LOCK_HELD=p; return true;
-  }catch(e){ appendLog("Output lock could not be taken ("+e.message+") - continuing, but do not run a second instance against this folder."); return true; }
+  }catch(e){
+    LOCK_TOKEN="";
+    appendLog("OUTPUT FOLDER LOCK could not be taken on "+outdir+" ("+e.message+") - stopping rather than running unprotected: two runs writing one output folder interleave their evidence.");
+    setStatus("Could not take the output-folder lock ("+e.message+"). Fix the folder's permissions or set a different Output directory, then re-run.","err");
+    return false; }
 }
 function touchOutputLock(){
   if(!LOCK_HELD) return;
-  try{ writeUtf8(LOCK_HELD, JSON.stringify({pid:selfPidWmi()||0, stamp:(new Date()).getTime(), iso:isoNowUtc(), app:APP_VERSION},null,1)); }catch(e){}
+  try{ writeUtf8(LOCK_HELD, lockRecord()); }catch(e){}
 }
-function releaseOutputLock(){ if(!LOCK_HELD) return; try{ deleteFileIfExists(LOCK_HELD); }catch(e){} LOCK_HELD=""; }
+function releaseOutputLock(){
+  if(!LOCK_HELD) return;
+  try{ var cur=null; try{ cur=JSON.parse(readUtf8(LOCK_HELD)); }catch(e0){}
+    if(!cur || String(cur.token||"")===String(LOCK_TOKEN)) deleteFileIfExists(LOCK_HELD);
+    else appendLog("Output lock "+LOCK_HELD+" now belongs to another instance (pid "+cur.pid+") - left in place.");
+  }catch(e){}
+  LOCK_HELD=""; LOCK_TOKEN="";
+}
 /* Returns TRUE only when the caches in `outdir` are safe to reuse for `src`.
    v1.17.17 (VS-008): this used to FAIL OPEN in three separate ways - deleteTree() results were
    ignored, the catch wrote no manifest but still let the run continue, and the return value meant
@@ -1086,19 +1134,36 @@ function releaseOutputLock(){ if(!LOCK_HELD) return; try{ deleteFileIfExists(LOC
    allowed to have, so uncertainty must resolve to "unsafe". */
 function bindSourceCache(outdir, src, mode){
   try{
-    var sig=sourceSigOf(src, mode), p=sourceManifestPath(outdir), old=null;
-    try{ if(fileExists(p)) old=JSON.parse(readUtf8(p)); }catch(e0){}
-    /* a tree we could not fully fingerprint is never "the same source" - we simply do not know */
+    var sig=sourceSigOf(src, mode), p=sourceManifestPath(outdir), old=null, hadManifest=false, manifestBad=false;
+    try{ if(fileExists(p)){ hadManifest=true; old=JSON.parse(readUtf8(p)); if(!old || typeof old!=="object") old=null; } }catch(e0){ old=null; }
+    if(hadManifest && !old) manifestBad=true;
+    /* v1.17.27 (R1): WHY the existing cache cannot be trusted, when it cannot. Each of these used to
+       leave old=null, skip the purge below (it ran only inside if(old)) and then write a fresh manifest -
+       blessing whatever _extracted / _view already held as THIS capture's evidence. */
+    var untrustedWhy="";
     if(sig.treeCapped){
-      appendLog("SOURCE CACHE: the extracted tree is too large to fingerprint within the "+nf(TREESIG_MAXNODES)+"-node budget, so it cannot be proven unchanged. Caches will be rebuilt for this run.");
+      untrustedWhy="the extracted tree could not be fingerprinted ("+(sig.treeWhy||("over the "+nf(TREESIG_MAXNODES)+"-node budget"))+"), so it cannot be proven unchanged";
       old=null; }
+    else if(manifestBad) untrustedWhy="the source manifest (source.json) is unreadable, so the owner of the existing cache cannot be established";
+    else if(!hadManifest) untrustedWhy="there is no source manifest, so the owner of the existing cache cannot be established";
     if(old && old.src===sig.src && old.size===sig.size && old.mtime===sig.mtime
            && old.mode===sig.mode && String(old.tree||"")===String(sig.tree||"")) return true;   // same source - caches valid
+    /* derived content is judged on its own existence, never on whether the manifest parsed */
+    var od=String(outdir).replace(/[\\\/]+$/,""), derived=[], i;
+    var dDirs=["_extracted","_view","_nodecfg","_inner"], dFiles=["toc.tsv","inner.json"];
+    for(i=0;i<dDirs.length;i++) if(folderExists(od+"\\"+dDirs[i])) derived.push(dDirs[i]);
+    for(i=0;i<dFiles.length;i++) if(fileExists(od+"\\"+dFiles[i])) derived.push(dFiles[i]);
     if(old){
       appendLog("SOURCE CHANGED for this output folder - cached extractions belong to a different capture and are being discarded:"
         +"\n  cached:  "+old.src+" | "+old.size+" | "+old.mtime+(old.tree?(" | "+old.tree):"")
         +"\n  current: "+sig.src+" | "+sig.size+" | "+sig.mtime+(sig.tree?(" | "+sig.tree):""));
-      var od=String(outdir).replace(/[\\\/]+$/,""), failed=[];
+    } else if(derived.length){
+      appendLog("SOURCE CACHE: "+untrustedWhy+". Derived content of unknown origin is being discarded rather than reused: "+derived.join(", ")+".");
+    } else if(sig.treeCapped){
+      appendLog("SOURCE CACHE: "+untrustedWhy+". Nothing is cached in this folder, so there is nothing to discard; caches will be rebuilt for this run.");
+    }
+    if(old || derived.length){
+      var failed=[];
       if(!deleteTree(od+"\\_extracted")) failed.push("_extracted");
       if(!deleteTree(od+"\\_view"))      failed.push("_view");
       if(!deleteTree(od+"\\_nodecfg"))   failed.push("_nodecfg");
@@ -1107,9 +1172,9 @@ function bindSourceCache(outdir, src, mode){
       if(!deleteFileIfExists(od+"\\inner.json")) failed.push("inner.json");
       if(failed.length){
         /* FAIL CLOSED. Writing the manifest here would bless another capture's files as this one's. */
-        appendLog("SOURCE CACHE VALIDATION FAILED - could not remove stale content from a DIFFERENT capture: "+failed.join(", ")
+        appendLog("SOURCE CACHE VALIDATION FAILED - could not remove stale content "+(old?"from a DIFFERENT capture":"of unknown origin")+": "+failed.join(", ")
           +". The manifest was NOT updated. Close anything holding those files (Explorer, an editor, AV) or point the output directory somewhere clean, then re-run.");
-        setStatus("Cache validation FAILED - stale extractions from a different capture could not be removed ("+failed.join(", ")+"). Refusing to reuse this output folder; choose a clean output directory and re-run.","err");
+        setStatus("Cache validation FAILED - stale extractions "+(old?"from a different capture":"of unknown origin")+" could not be removed ("+failed.join(", ")+"). Refusing to reuse this output folder; choose a clean output directory and re-run.","err");
         return false; }
     }
     writeUtf8(p, JSON.stringify(sig,null,1));
@@ -5535,7 +5600,7 @@ function parseVmx(txt, rel, run){
   var name=g(/^\s*displayName\s*=\s*"([^"]*)"/im)||baseName(rel).replace(/\.vmx$/i,"");
   var mem=g(/^\s*memSize\s*=\s*"(\d+)"/im), gos=g(/^\s*guestOS\s*=\s*"([^"]*)"/im), pretty=g(/prettyName='([^']+)'/i);
   var disks=[], dre=/^\s*(?:scsi|sata|nvme|ide)\d+:\d+\.fileName\s*=\s*"([^"]+\.vmdk)"/img, dm; while((dm=dre.exec(txt))) disks.push(dm[1]);
-  var vsan=/vsan:/i.test(rel), ds=vsan?"vSAN":((rel.match(/volumes\/([^\/]+)\//)||[])[1]||"");
+  var vsan=/vsan[:_]/i.test(rel), ds=vsan?"vSAN":((rel.match(/volumes\/([^\/]+)\//)||[])[1]||"");
   var running=!!(run[lc(rel)] || run["base:"+lc(baseName(rel))] || run["name:"+lc(name)]);
   var gp=vsanPathFromRel(rel);
   return { name:name, os:pretty||gos, vcpu:parseInt(g(/^\s*numvcpus\s*=\s*"(\d+)"/im),10)||1, memMB:mem?parseInt(mem,10):0,
@@ -5608,12 +5673,16 @@ function vsanGuidPath(dsUuid, vmGuid){ return (dsUuid&&vmGuid) ? ("/vmfs/volumes
    config path there is no evidence, and the cell says so rather than guessing.
    For a ransom-renamed VM cfg is "<folder>/(vmx missing)", so the FOLDER still resolves - which is the
    case where you need the path most. */
+/* v1.17.27 (R6): bsdtar rewrites ':' to '_' when it extracts a vsan: path onto NTFS, so a tree-mode
+   member path reads vsan_<uuid>. That is a Windows artefact, not an on-host path - anything DISPLAYED as
+   a host path goes through here. The original member path is kept for file access. */
+function vsanOnHostPath(p){ return String(p||"").replace(/\/vsan_([0-9a-f]{16}-[0-9a-f]{16})(?=\/|$)/ig, "/vsan:$1"); }
 function vmFolderPath(v){
   var c=String((v&&v.cfg)||""); if(!c) return "";
   c=c.replace(/\\/g,"/");
   var i=c.lastIndexOf("/"); if(i<1) return "";
   var d=c.substring(0,i); if(!d) return "";
-  return (d.charAt(0)==="/") ? d : ("/"+d);          // bundle-relative "vmfs/volumes/..." -> on-host "/vmfs/volumes/..."
+  return vsanOnHostPath((d.charAt(0)==="/") ? d : ("/"+d));   // bundle-relative "vmfs/volumes/..." -> on-host "/vmfs/volumes/..."
 }
 /* derive the GUID path straight from a captured vmfs path. Accepts both 'vsan:' (archive/TOC rel and
    real ESXi paths) and 'vsan_' (bsdtar rewrites ':' -> '_' when extracting to NTFS, so a tree-mode
@@ -6359,7 +6428,10 @@ function vmxIsMissing(cfgRel){ return /\(vmx missing\)$/i.test(String(cfgRel||""
 function vcVmByName(nm){ for(var i=0;i<VMS.length;i++){ if(VMS[i] && VMS[i].name===nm) return VMS[i]; } return null; }
 function vmEventsFor(nm){ var o=[], k=lc(nm); for(var i=0;i<VMEV.length;i++){ if(lc(VMEV[i].vm)===k) o.push(VMEV[i]); }
   o.sort(function(a,b){ return a.epoch-b.epoch; }); return o; }
-function kvRow(k, val, tip){
+/* v1.17.27 (R5): was a second top-level kvRow(). Function declarations hoist and the LAST one wins, so
+   the Overview's div helper silently replaced this table-row helper for every caller below: escaped
+   copy-links rendered as literal markup and empty fields vanished. Renamed by purpose. */
+function kvTr(k, val, tip){
   return '<tr><td class="k mono muted" style="width:190px;vertical-align:top"'+(tip?(' title="'+esc(tip)+'"'):'')+'>'+esc(k)+'</td>'
         +'<td class="mono"'+(tip?(' title="'+esc(tip)+'"'):'')+'>'+(val||'<span class="muted">-</span>')+'</td></tr>';
 }
@@ -6378,15 +6450,15 @@ function openVcVm(nm){
     +(v.host?('<b>'+esc(v.host)+'</b>'):'this VM&#39;s host')+'. What vCenter itself recorded is below.</div>';
 
   h+='<div class="panel" style="margin-bottom:10px"><h4>Identity &amp; recovery</h4><table>'
-    +kvRow("MoRef (current)", mo?esc(mo):"", "vCenter managed-object ID(s) seen in the retained vpxd logs.")
-    +kvRow("MoRef (baseline)", moB?esc(moB):"", "MoRef in the vSAN-health baseline snapshot. A DIFFERENT value from the current one means the VM was re-registered - deleted and restored, typically - since that snapshot.")
-    +kvRow("Host", v.host?esc(v.host):"", v.host?("Placement from the newest DRS dump."):"Not powered on in the newest DRS placement dump, so no host is known.")
-    +kvRow("vCPU / vRAM", (v.vcpu?esc(v.vcpu+" vCPU"):"")+(v.memMB?(" / "+esc(fmtMB(v.memMB))):""), v.specSrc?("source: "+v.specSrc):"No DRS VMData for this VM - it was not powered on in the newest dump, which is the only sizing source in a vCenter bundle.")
-    +kvRow("vDisks (backup I/O)", v.disks&&v.disks.length?esc(v.disks.join(", ")):"", "Disks inferred from backup .vmdk reads in the vpxd /folder traffic. NOT a full disk list - a vc-support bundle has no .vmx.")
-    +kvRow("vSAN GUID path", v.guidPath?('<span class="lnk" data-copy="'+esc(v.guidPath)+'">'+esc(v.guidPath)+'</span>'):"", v.guidPath?("THE RECOVERY HANDLE - it survives a ransomware rename of the .vmx. Source: "+(v.guidSrc||"vpxd")+". Click to copy."):(v.vsan?"On vSAN, but no folder GUID appeared in the retained logs.":"Not on vSAN - no vSAN GUID path."))
-    +kvRow("Status", esc(titleLabel(v.status||(v.running?"powered on":""))), v.status||"")
-    +kvRow("Encrypted / restored", v.enc?('<span class="hl-ioc">'+esc(v.enc)+'</span>'):"", v.enc?("Advisory recovery/encryption signal - correlate with the incident window before concluding."):"No restore or re-registration signal for this VM.")
-    +kvRow("Evidence sources", srcs.length?esc(srcs.join(", ")):"", "Which parsers contributed this row - your provenance for everything above.")
+    +kvTr("MoRef (current)", mo?esc(mo):"", "vCenter managed-object ID(s) seen in the retained vpxd logs.")
+    +kvTr("MoRef (baseline)", moB?esc(moB):"", "MoRef in the vSAN-health baseline snapshot. A DIFFERENT value from the current one means the VM was re-registered - deleted and restored, typically - since that snapshot.")
+    +kvTr("Host", v.host?esc(v.host):"", v.host?("Placement from the newest DRS dump."):"Not powered on in the newest DRS placement dump, so no host is known.")
+    +kvTr("vCPU / vRAM", (v.vcpu?esc(v.vcpu+" vCPU"):"")+(v.memMB?(" / "+esc(fmtMB(v.memMB))):""), v.specSrc?("source: "+v.specSrc):"No DRS VMData for this VM - it was not powered on in the newest dump, which is the only sizing source in a vCenter bundle.")
+    +kvTr("vDisks (backup I/O)", v.disks&&v.disks.length?esc(v.disks.join(", ")):"", "Disks inferred from backup .vmdk reads in the vpxd /folder traffic. NOT a full disk list - a vc-support bundle has no .vmx.")
+    +kvTr("vSAN GUID path", v.guidPath?('<span class="lnk" data-copy="'+esc(v.guidPath)+'">'+esc(v.guidPath)+'</span>'):"", v.guidPath?("THE RECOVERY HANDLE - it survives a ransomware rename of the .vmx. Source: "+(v.guidSrc||"vpxd")+". Click to copy."):(v.vsan?"On vSAN, but no folder GUID appeared in the retained logs.":"Not on vSAN - no vSAN GUID path."))
+    +kvTr("Status", esc(titleLabel(v.status||(v.running?"powered on":""))), v.status||"")
+    +kvTr("Encrypted / restored", v.enc?('<span class="hl-ioc">'+esc(v.enc)+'</span>'):"", v.enc?("Advisory recovery/encryption signal - correlate with the incident window before concluding."):"No restore or re-registration signal for this VM.")
+    +kvTr("Evidence sources", srcs.length?esc(srcs.join(", ")):"", "Which parsers contributed this row - your provenance for everything above.")
     +'</table></div>';
 
   h+='<div class="panel"><h4>vCenter tasks for this VM <span class="sub">- '+nf(ev.length)+' event(s) from the retained vpxd window</span></h4>';
@@ -7329,31 +7401,51 @@ function isoNow(){ var d=new Date(); function p(x){return (x<10?"0":"")+x;}
    keyed on path + mode + app version ALONE: edit, add or delete any file in an extracted bundle and
    the saved analysis was still served as current, indefinitely. Now a tree carries the same content
    fingerprint the source-cache uses. A tree too large to fingerprint yields "" and is never reused. */
+/* v1.17.27 (R3): what the analysis was RUN WITH is part of its identity. The snapshot signature used to
+   carry source metadata and the tool version only, so adding an IOC or ticking "Incl. Rotated Logs"
+   still served the previous counts as current. The digest covers the IOC table, the rotation setting,
+   the cve.json in use (as loaded for this session) and the NVD toggle. The case window is deliberately
+   NOT included: it filters what Timeline and Logons DISPLAY and changes nothing the snapshot stores. */
+var SNAP_WHY="";
+function analysisSettingsSig(){
+  var parts=[], i;
+  try{ var rows=[]; for(i=0;i<IOC_ROWS.length;i++){ var r=IOC_ROWS[i]||{}; var v=trimStr(String(r.v||"")); if(!v) continue; rows.push(lc(String(r.t||""))+"="+lc(v)); }
+       rows.sort(); parts.push("ioc:"+rows.length+":"+digest64(rows.join("\n"))); }catch(e1){ parts.push("ioc:unknown"); }
+  parts.push("rot:"+(DEEPROT?1:0)+"/"+MAXROT);
+  try{ if(!CVEDATA && !CVEDATA_ERR) loadCveData(); parts.push("cve:"+(CVEDATA?digest64(JSON.stringify(CVEDATA)):"none")); }catch(e2){ parts.push("cve:unknown"); }
+  parts.push("nvd:"+(NVD_ON?1:0));
+  return "s1|"+parts.join("|");
+}
 function snapSig(path, archive, mode, root){ var sz=0, mt="", tree="", tcap=false;
   try{ if(archive){ sz=fileSize(archive); mt=fileMtime(archive); }
        else if(mode==="tree" && root){ var tf=treeFingerprint(root); tree=tf.sig; tcap=tf.capped; } }catch(e){}
   return { path:String(path||""), archive:String(archive||""), size:sz, mtime:mt, mode:String(mode||""),
-           tree:tree, treeCapped:!!tcap, ver:APP_VERSION }; }
+           tree:tree, treeCapped:!!tcap, ver:APP_VERSION, settings:analysisSettingsSig() }; }
 function snapPath(outdir){ return String(outdir).replace(/[\\\/]+$/,"")+"\\snapshot.json"; }
 function saveSnapshot(outdir, sig, snap){
   try{ writeUtf8(snapPath(outdir), JSON.stringify({sig:sig, snap:snap}, null, 1)); }catch(e){ appendLog("snapshot save failed: "+e.message); } }
 function loadSnapshot(outdir, sig){
-  try{ var p=snapPath(outdir); if(!fileExists(p)) return null;
-    var o=JSON.parse(readUtf8(p)); if(!o||!o.sig||!o.snap) return null; var s=o.sig;
-    if(s.ver!==sig.ver) return null;                     // tool changed -> re-analyze
-    if(lc(s.path)!==lc(sig.path)) return null;           // different source path
-    if(s.mode!==sig.mode) return null;                   // toc vs tree
-    if(sig.size && s.size!==sig.size) return null;       // archive size changed -> re-analyze
-    if(sig.mtime && s.mtime!==sig.mtime) return null;    // archive rewritten in place (same size) -> re-analyze
+  SNAP_WHY="";   // v1.17.27: the reason a saved analysis was not reused, for the run log
+  try{ var p=snapPath(outdir); if(!fileExists(p)){ SNAP_WHY="no saved analysis in "+outdir; return null; }
+    var o=JSON.parse(readUtf8(p)); if(!o||!o.sig||!o.snap){ SNAP_WHY="the saved analysis file is unreadable"; return null; } var s=o.sig;
+    if(s.ver!==sig.ver){ SNAP_WHY="saved by tool v"+s.ver+", this is v"+sig.ver; return null; }                     // tool changed -> re-analyze
+    if(lc(s.path)!==lc(sig.path)){ SNAP_WHY="saved from a different source path"; return null; }                // different source path
+    if(s.mode!==sig.mode){ SNAP_WHY="saved from a different source kind (archive vs extracted tree)"; return null; }   // toc vs tree
+    if(sig.size && s.size!==sig.size){ SNAP_WHY="the archive's size changed"; return null; }                    // archive size changed -> re-analyze
+    if(sig.mtime && s.mtime!==sig.mtime){ SNAP_WHY="the archive was rewritten in place (same size, new mtime)"; return null; }
     /* v1.17.17 (VS-001) - extracted trees. Unlike size/mtime above these are NOT guarded on the
        current value being truthy: an empty fingerprint means "could not be established", and reusing
        a saved analysis we cannot tie to the tree in front of us is exactly the bug being fixed. */
     if(sig.mode==="tree"){
-      if(sig.treeCapped || !sig.tree) return null;       // tree too large / unreadable to fingerprint
-      if(String(s.tree||"")!==String(sig.tree)) return null;   // tree content changed -> re-analyze
+      if(sig.treeCapped || !sig.tree){ SNAP_WHY="the extracted tree could not be fingerprinted, so it cannot be proven unchanged"; return null; }
+      if(String(s.tree||"")!==String(sig.tree)){ SNAP_WHY="the extracted tree's content changed"; return null; }
     }
+    /* v1.17.27 (R3): same source, different analysis settings -> the saved counts answer a different question */
+    if(String(s.settings||"")!==String(sig.settings||"")){ SNAP_WHY="the analysis settings changed since it was saved (IOC list, rotated-log setting, CVE data or NVD toggle)"; return null; }
+    /* v1.17.27 (R8): a saved analysis with failed stages is re-run, never served as current */
+    if(o.snap.parserFailures && o.snap.parserFailures.length){ SNAP_WHY="the saved analysis had "+o.snap.parserFailures.length+" failed stage(s) ("+o.snap.parserFailures.join(", ")+") - re-running so they get another attempt"; return null; }
     var snap=o.snap; snap.reused=true; return snap;
-  }catch(e){ return null; } }
+  }catch(e){ SNAP_WHY="the saved analysis could not be read ("+(e.message||e)+")"; return null; } }
 function fleetBase(){ var b=htaFolder(); if(!b){ try{ b=new ActiveXObject("Scripting.FileSystemObject").GetSpecialFolder(2)+""; }catch(e){ return ""; } } return b+"\\_Processed\\_fleet"; }
 var SKIP_DIRS={"#_processed":1,"#_extracted":1,"#_view":1,"#tools":1,"#_fleet":1,"#_nodecfg":1};   // "#"-prefixed: keys are folder names off disk
 /* reparse point (junction / symlink) - descending into these is how a fleet walk on a fresh VM loops
@@ -7469,7 +7561,8 @@ function processHostSync(path){
     return null; }
   var sig=snapSig(path, ARCHIVE, MODE, ROOT);
   if(FLEET_REUSE){ var cached=loadSnapshot(LASTOUTDIR, sig);
-    if(cached){ trace(tp+" | reused cached snapshot"); appendLog("  = "+host+" reused saved analysis from "+(cached.analyzedAt||"?")+" (source unchanged, skipped re-parse)"); return cached; } }
+    if(cached){ trace(tp+" | reused cached snapshot"); appendLog("  = "+host+" reused saved analysis from "+(cached.analyzedAt||"?")+" (source and analysis settings unchanged, skipped re-parse)"); return cached; }
+    else if(SNAP_WHY) appendLog("  = "+host+" saved analysis NOT reused - "+SNAP_WHY); }
   $("hostName").value=host;
   trace(tp+" | detectType");
   if(MODE==="toc"){ if(!readTocSync(ARCHIVE)){ trace(tp+" | readTocSync failed (skip)"); return null; } detectType(); }
@@ -7606,6 +7699,10 @@ function snapshotHost(host, path){
     vmCount:VMS.length, vmRunning:vmRun, managedHosts:mh.hosts, guestIp:mh.guestIp,
     managedMorefs:mh.morefs||[], hostMoRef:vcl.moref, vcServerIp:vcl.serverIp, mgmtIp:NODE.mgmtIp||"",
     indexPartial:TOC_PARTIAL||"", indexTree:(MODE==="tree"),
+    /* v1.17.27 (R8): analysis completeness rides the snapshot too. The roster used to badge only an
+       incomplete ARCHIVE INDEX; a failed parser stage or a capped log left a row reading risk 0 with no
+       disclosure, and that row was saved and reused. */
+    parserFailures:ANALYSIS_ERRS.slice(0), logsTruncated:LOG_TRUNC.slice(0), iocSweepCap:IOC_SWEEPCAP||"",
     keyPresent:present, keyTotal:INVENTORY.length, keyMiss:missN,
     logons:LOGON.length, logonFlagged:lf, logonExt:ext.n, extIps:ext.ips,
     actions:ACTIONS.length, actFlagged:af, persistFlagged:persistHits(), indicHits:indHits(), indicList:indicNames(),
@@ -7768,6 +7865,9 @@ function renderRoster(){
         /* v1.17.21 (P4): a tree cannot be proven complete the way an archive can - say so rather than
            let an unverifiable source sit on the roster looking identical to a verified one. */
         +((!r.indexPartial && r.indexTree)?(' <span class="tag cmd" title="'+esc("Read from an EXTRACTED FOLDER, not an archive. There is no manifest to verify it against, so completeness cannot be established - a tree unpacked from a truncated archive looks identical to a complete one. Not a finding; a limit on what this row can promise. Point the scan at the original archive if you need the completeness check.")+'">tree</span>'):'')
+        /* v1.17.27 (R8): parser failures and coverage caps are shown on the row, separately from risk */
+        +((r.parserFailures&&r.parserFailures.length)?(' <span class="tag ioc" title="'+esc("ANALYSIS INCOMPLETE - "+r.parserFailures.length+" parser stage(s) FAILED on this host: "+r.parserFailures.join(", ")+". Every count that stage feeds is missing from this row, so a low risk here is not evidence of a clean host. Open the host, read the log, and re-run - a saved analysis with failed stages is never reused.")+'">'+r.parserFailures.length+' FAILED</span>'):'')
+        +((r.logsTruncated&&r.logsTruncated.length)?(' <span class="tag sus" title="'+esc("COVERAGE LIMITED - "+r.logsTruncated.length+" log(s) were read only in part, not decompressed, or not fully swept: "+r.logsTruncated.slice(0,5).join("; ")+(r.logsTruncated.length>5?(" ... and "+(r.logsTruncated.length-5)+" more"):"")+". An absence in this row may be an absence in the window read, not on the host.")+'">'+r.logsTruncated.length+' capped</span>'):'')
       +'</td><td class="mono"><span class="'+clCls+'" title="'+esc(clTip)+'">'+esc(r.clusterLabel||"-")+'</span></td><td>'+esc(r.type)+'</td><td class="mono muted">'+esc((r.version?r.version+" ":"")+r.build)+'</td>'
       +'<td class="mono">'+(r.serial?esc(r.serial):'<span class="muted">-</span>')+'</td>'
       +'<td class="mono">'+(r.vmCount!=null?(r.vmCount+(r.vmRunning?(' <span class="muted">('+r.vmRunning+' run)</span>'):'')):'-')+'</td>'
@@ -7788,9 +7888,19 @@ function drillHost(rec){ if(!rec) return; FLEETMODE=false; showEl("fleetCard",fa
   $("inPath").value=rec.srcPath; $("hostName").value=rec.host; HOST_TOUCHED=true; OUT_TOUCHED=false; syncOutDir();
   setStatus("Opening "+rec.host+"…","muted"); window.setTimeout(analyze, 30);
 }
+/* v1.17.27 (R8): one sentence on how complete a fleet row's analysis is, for the report and CSV */
+function fleetCompleteness(r){
+  var o=[];
+  if(r.indexPartial) o.push("PARTIAL archive index");
+  if(r.parserFailures && r.parserFailures.length) o.push(r.parserFailures.length+" stage(s) failed: "+r.parserFailures.join(", "));
+  if(r.logsTruncated && r.logsTruncated.length) o.push(r.logsTruncated.length+" log(s) capped or not decompressed");
+  if(r.iocSweepCap) o.push("IOC sweep stopped at its cap");
+  if(!o.length) return r.indexTree ? "complete (extracted tree - not verifiable)" : "complete";
+  return o.join("; ");
+}
 function fleetExport(){ if(!FLEET.length){ setStatus("No fleet to export.","err"); return; }
-  var out=["Host,Type,Version,Build,Serial,KeyPresent,KeyTotal,KeyMissing,Logons,LogonFlagged,LogonExternal,Actions,ActionFlagged,PersistFlagged,Indicators,CVEFlagged,IOCHits,Risk,Analyzed,Reused"];
-  for(var i=0;i<FLEET.length;i++){ var r=FLEET[i]; out.push([cqx(r.host),cqx(r.type),cqx(r.version),cqx(r.build),cqx(r.serial||""),r.keyPresent,r.keyTotal,r.keyMiss,r.logons,r.logonFlagged,r.logonExt,r.actions,r.actFlagged,r.persistFlagged,r.indicHits,r.cveFlag,r.iocHits,r.risk,cqx(r.analyzedAt||""),(r.reused?1:0)].join(",")); }
+  var out=["Host,Type,Version,Build,Serial,KeyPresent,KeyTotal,KeyMissing,Logons,LogonFlagged,LogonExternal,Actions,ActionFlagged,PersistFlagged,Indicators,CVEFlagged,IOCHits,Risk,Analyzed,Reused,IndexPartial,ParserFailures,LogsTruncated,Completeness"];
+  for(var i=0;i<FLEET.length;i++){ var r=FLEET[i]; out.push([cqx(r.host),cqx(r.type),cqx(r.version),cqx(r.build),cqx(r.serial||""),r.keyPresent,r.keyTotal,r.keyMiss,r.logons,r.logonFlagged,r.logonExt,r.actions,r.actFlagged,r.persistFlagged,r.indicHits,r.cveFlag,r.iocHits,r.risk,cqx(r.analyzedAt||""),(r.reused?1:0),cqx(r.indexPartial||""),cqx((r.parserFailures||[]).join("; ")),cqx((r.logsTruncated||[]).join("; ")),cqx(fleetCompleteness(r))].join(",")); }
   var p=fleetBase()+"\\roster_"+nowStamp()+".csv"; try{ writeUtf8(p,out.join("\r\n")); setStatus("Roster → "+p,"ok"); }catch(e){ setStatus("Export failed: "+e.message,"err"); }
 }
 function fleetReport(){ if(!FLEET.length){ setStatus("No fleet to report.","err"); return; }
@@ -7798,8 +7908,8 @@ function fleetReport(){ if(!FLEET.length){ setStatus("No fleet to report.","err"
   var h=['<!doctype html><html><head><meta charset="utf-8"><title>vSphere Fleet Analysis Report</title>',
     '<style>:root{color-scheme:light}body{font-family:Segoe UI,Arial,sans-serif;margin:24px;background:#fff;color:#1b2330;font-size:13px}h1{font-size:20px;margin:0}h2{font-size:14px;border-bottom:2px solid #1f6feb;padding-bottom:3px;margin:18px 0 8px;color:#0b2a5b}table{border-collapse:collapse;width:100%;font-size:12px;margin:6px 0}th,td{border:1px solid #ccd2da;padding:4px 7px;text-align:left}th{background:#eef2f7}.hit{color:#b00020;font-weight:700}.muted{color:#6a7686}.mono{font-family:Consolas,monospace}</style></head><body>',
     '<h1>vSphere Fleet Analysis Report</h1><div class="muted">'+FLEET.length+' host(s) &middot; generated '+gen+' &middot; tool v'+APP_VERSION+'</div>',
-    '<h2>Roster (by risk)</h2><table><tr><th>Host</th><th>Type</th><th>Version/Build</th><th>Serial</th><th>KeyFiles</th><th>Logons(flag)</th><th>Actions(flag)</th><th>Persist</th><th>Indicators</th><th>CVE</th><th>IOC</th><th>Risk</th></tr>'];
-  for(var i=0;i<FLEET.length;i++){ var r=FLEET[i]; h.push('<tr><td><b>'+esc(r.host)+'</b></td><td>'+esc(r.type)+'</td><td class="mono">'+esc((r.version?r.version+" ":"")+r.build)+'</td><td class="mono">'+esc(r.serial||"-")+'</td><td>'+r.keyPresent+'/'+r.keyTotal+'</td><td'+(r.logonFlagged?' class="hit"':'')+'>'+r.logons+' ('+r.logonFlagged+')'+(r.logonExt?(' ext '+r.logonExt):'')+'</td><td'+(r.actFlagged?' class="hit"':'')+'>'+r.actions+' ('+r.actFlagged+')</td><td'+(r.persistFlagged?' class="hit"':'')+'>'+r.persistFlagged+'</td><td'+(r.indicHits?' class="hit"':'')+'>'+r.indicHits+'</td><td>'+r.cveFlag+'</td><td>'+r.iocHits+'</td><td><b>'+r.risk+'</b></td></tr>'); }
+    '<h2>Roster (by risk)</h2><table><tr><th>Host</th><th>Type</th><th>Version/Build</th><th>Serial</th><th>KeyFiles</th><th>Logons(flag)</th><th>Actions(flag)</th><th>Persist</th><th>Indicators</th><th>CVE</th><th>IOC</th><th>Risk</th><th>Completeness</th></tr>'];
+  for(var i=0;i<FLEET.length;i++){ var r=FLEET[i]; h.push('<tr><td><b>'+esc(r.host)+'</b></td><td>'+esc(r.type)+'</td><td class="mono">'+esc((r.version?r.version+" ":"")+r.build)+'</td><td class="mono">'+esc(r.serial||"-")+'</td><td>'+r.keyPresent+'/'+r.keyTotal+'</td><td'+(r.logonFlagged?' class="hit"':'')+'>'+r.logons+' ('+r.logonFlagged+')'+(r.logonExt?(' ext '+r.logonExt):'')+'</td><td'+(r.actFlagged?' class="hit"':'')+'>'+r.actions+' ('+r.actFlagged+')</td><td'+(r.persistFlagged?' class="hit"':'')+'>'+r.persistFlagged+'</td><td'+(r.indicHits?' class="hit"':'')+'>'+r.indicHits+'</td><td>'+r.cveFlag+'</td><td>'+r.iocHits+'</td><td><b>'+r.risk+'</b></td><td'+(/^complete/.test(fleetCompleteness(r))?'':' class="hit"')+'>'+esc(fleetCompleteness(r))+'</td></tr>'); }
   h.push('</table>');
   var groups=clusterGroups();
   h.push('<h2>Clusters (vSAN sub-cluster grouping)</h2><table><tr><th>Cluster</th><th>vSAN UUID</th><th>Hosts present</th><th>vCenter</th></tr>');
@@ -8663,16 +8773,27 @@ function viewablePath(src){
     appendLog("  "+qn); return "";
   }
   var srcSz=0; try{ srcSz=fileSize(src); }catch(eS){}
+  /* v1.17.27 (R4): decompress into a unique temporary sibling and promote it only when the decompressor
+     exits 0. Both branches used to discard runBat's result and treat "a file exists" as success, so a
+     damaged stream or a disk error left a truncated log in _view that every later call served as the
+     whole file - silently and permanently. A failed output is deleted and disclosed in LOG_TRUNC. */
+  var tmp=dst+".part-"+uid(), r=null;
   if(/\.gz$/.test(low)){
-    var srcq=src.replace(/'/g,"''"), dstq=dst.replace(/'/g,"''");
-    var cmd="$i=[IO.File]::OpenRead('"+srcq+"');$g=New-Object System.IO.Compression.GZipStream($i,[System.IO.Compression.CompressionMode]::Decompress);$o=[IO.File]::Create('"+dstq+"');$g.CopyTo($o);$o.Dispose();$g.Dispose();$i.Dispose()";
-    runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+cmd.replace(/"/g,'\\"')+'" > "__LOG__" 2>&1'], false);
+    var srcq=src.replace(/'/g,"''"), dstq=tmp.replace(/'/g,"''");
+    var cmd="try{$i=[IO.File]::OpenRead('"+srcq+"');$g=New-Object System.IO.Compression.GZipStream($i,[System.IO.Compression.CompressionMode]::Decompress);$o=[IO.File]::Create('"+dstq+"');$g.CopyTo($o);$o.Dispose();$g.Dispose();$i.Dispose();exit 0}catch{Write-Output ('GZIP FAILED: '+$_);exit 1}";
+    r=runBat(['powershell -NoProfile -ExecutionPolicy Bypass -Command "'+cmd.replace(/"/g,'\\"')+'" > "__LOG__" 2>&1', 'exit /b %errorlevel%'], false);
   } else { // .zst
     if(!ensureZstd()) return "";
-    runBat(['"'+batEsc(ZSTD)+'" -d -f "'+batEsc(src)+'" -o "'+batEsc(dst)+'" > "__LOG__" 2>&1'], false);
+    r=runBat(['"'+batEsc(ZSTD)+'" -d -f "'+batEsc(src)+'" -o "'+batEsc(tmp)+'" > "__LOG__" 2>&1', 'exit /b %errorlevel%'], false);
   }
-  if(!fileExists(dst)) return "";
-  var outSz=0; try{ outSz=fileSize(dst); }catch(eO){}
+  var rc=(r && typeof r.rc==="number")?r.rc:-1;
+  if(rc!==0 || !fileExists(tmp)){
+    var detail=""; try{ detail=String((r&&r.log)||"").replace(/\s+/g," "); }catch(eD){} if(detail.length>300) detail=detail.substring(0,300)+"...";
+    var fnote=baseName(src)+" could not be decompressed"+(rc!==0?(" (decompressor exit code "+rc+")"):" (no output was produced)")+(detail?(": "+detail):"")+" - NOT analysed; anything in it is absent from this analysis";
+    appendLog("  "+fnote); if(!logWasCapped(baseName(src))) LOG_TRUNC.push(fnote);
+    deleteFileIfExists(tmp); return "";
+  }
+  var outSz=0; try{ outSz=fileSize(tmp); }catch(eO){}
   /* a single member that expands beyond the whole-run budget, or at an implausible ratio, is treated
      as hostile: removed, disclosed, and the run continues without it rather than filling the disk */
   if(outSz>VIEW_MEMBER_MAX || (srcSz>0 && outSz/srcSz>VIEW_MAX_RATIO && outSz>VIEW_RATIO_FLOOR)){
@@ -8682,7 +8803,11 @@ function viewablePath(src){
     appendLog("  SECURITY: "+why+". It was DISCARDED and is not analysed - treat this bundle as suspect until explained.");
     LOG_TRUNC.push(why+" - discarded, not analysed");
     setStatus("A compressed member expanded implausibly ("+baseName(src)+") - discarded and NOT analysed. Treat this bundle as tampered until explained.","err");
-    deleteFileIfExists(dst); return "";
+    deleteFileIfExists(tmp); return "";
+  }
+  if(!moveFile(tmp, dst)){
+    var mnote=baseName(src)+" was decompressed but could not be placed in the cache ("+dst+") - NOT analysed";
+    appendLog("  "+mnote); LOG_TRUNC.push(mnote); deleteFileIfExists(tmp); return "";
   }
   VIEW_BYTES+=outSz;
   return dst;
